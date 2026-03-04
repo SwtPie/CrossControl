@@ -223,6 +223,7 @@ function render() {
     live:         'Course en direct',
     terminees:    'Courses terminées',
     classement:   'Classement & résultats',
+    statistiques: 'Statistiques',
     parametres:   'Paramètres',
   };
   document.getElementById('page-title').textContent       = titles[state.page] || '';
@@ -233,8 +234,9 @@ function render() {
     courses:      renderCourses,
     live:         renderLive,
     terminees:    renderTerminees,
-    classement:   renderClassement,
-    parametres:   renderParametres,
+    classement:    renderClassement,
+    statistiques:  renderStatistiques,
+    parametres:    renderParametres,
   };
   (pages[state.page] || (() => {}))();
 }
@@ -1077,6 +1079,299 @@ async function renderClassement() {
       </table>
     </div>
   `;
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
+// PAGE : STATISTIQUES
+// ════════════════════════════════════════════════════════════════════════════════
+function renderStatistiques() {
+  const participants = state.participants;
+
+  if (!participants.length) {
+    document.getElementById('content').innerHTML = `
+      <div class="empty"><div class="empty-icon">📊</div><p>Aucun participant enregistré.</p></div>`;
+    return;
+  }
+
+  document.getElementById('content').innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px">
+      <div class="card">
+        <div class="card-title">Répartition par sexe</div>
+        <div style="display:flex;align-items:center;gap:24px;margin-top:8px">
+          <canvas id="chart-sexe" width="160" height="160"></canvas>
+          <div id="legend-sexe" style="flex:1"></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Répartition par établissement</div>
+        <div style="display:flex;align-items:center;gap:24px;margin-top:8px">
+          <canvas id="chart-etab" width="160" height="160"></canvas>
+          <div id="legend-etab" style="flex:1;max-height:160px;overflow-y:auto"></div>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">Répartition par tranche de VMA (km/h)</div>
+      <canvas id="chart-vma" height="200" style="width:100%;display:block"></canvas>
+    </div>
+  `;
+
+  requestAnimationFrame(() => {
+    drawSexeChart(participants);
+    drawEtabChart(participants);
+    drawVmaChart(participants);
+  });
+}
+
+/* ── helpers ── */
+function setupCanvas(canvas, cssWidth, cssHeight) {
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width  = cssWidth  * dpr;
+  canvas.height = cssHeight * dpr;
+  canvas.style.width  = cssWidth  + 'px';
+  canvas.style.height = cssHeight + 'px';
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  return ctx;
+}
+
+function chartColors() {
+  const light = document.body.classList.contains('theme-light');
+  return {
+    text:    light ? '#4a526b' : '#8a92a8',
+    text2:   light ? '#1a1e2e' : '#e8ecf4',
+    border:  light ? '#d0d5e2' : '#2a2f3d',
+    surface2:light ? '#e8ebf2' : '#1e2230',
+    accent:  '#d60a3c',
+    palette: ['#d60a3c','#4a9eff','#3ecf6e','#e05a2b','#a78bfa','#f59e0b','#06b6d4','#ec4899','#84cc16','#f97316'],
+  };
+}
+
+function drawSexeChart(participants) {
+  const canvas = document.getElementById('chart-sexe');
+  if (!canvas) return;
+  const ctx = setupCanvas(canvas, 160, 160);
+  const C = chartColors();
+
+  const counts = { F: 0, M: 0, '—': 0 };
+  participants.forEach(p => {
+    if (p.sexe === 'F') counts['F']++;
+    else if (p.sexe === 'M') counts['M']++;
+    else counts['—']++;
+  });
+
+  const labels  = Object.keys(counts).filter(k => counts[k] > 0);
+  const values  = labels.map(k => counts[k]);
+  const total   = values.reduce((a, b) => a + b, 0);
+  const colors  = ['#d60a3c', '#4a9eff', '#8a92a8'];
+  const labelNames = { F: 'Féminin', M: 'Masculin', '—': 'Non renseigné' };
+
+  const cx = canvas.width / 2, cy = canvas.height / 2, r = 65, ri = 38;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  let angle = -Math.PI / 2;
+  labels.forEach((lbl, i) => {
+    const slice = (values[i] / total) * 2 * Math.PI;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.arc(cx, cy, r, angle, angle + slice);
+    ctx.closePath();
+    ctx.fillStyle = colors[i];
+    ctx.fill();
+    angle += slice;
+  });
+
+  // Trou central (donut)
+  ctx.beginPath();
+  ctx.arc(cx, cy, ri, 0, 2 * Math.PI);
+  ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--surface').trim() || '#161920';
+  ctx.fill();
+
+  // Texte central
+  ctx.fillStyle = C.text2;
+  ctx.font = `600 22px IBM Plex Mono, monospace`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(total, cx, cy - 8);
+  ctx.font = `10px IBM Plex Sans, sans-serif`;
+  ctx.fillStyle = C.text;
+  ctx.fillText('élèves', cx, cy + 10);
+
+  // Légende
+  const legend = document.getElementById('legend-sexe');
+  if (legend) {
+    legend.innerHTML = labels.map((lbl, i) => `
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+        <div style="width:12px;height:12px;border-radius:3px;background:${colors[i]};flex-shrink:0"></div>
+        <div>
+          <div style="font-size:12px;font-weight:600;color:var(--text)">${labelNames[lbl]}</div>
+          <div style="font-size:11px;color:var(--text3);font-family:var(--font-mono)">${values[i]} (${Math.round(values[i]/total*100)}%)</div>
+        </div>
+      </div>`).join('');
+  }
+}
+
+function drawEtabChart(participants) {
+  const canvas = document.getElementById('chart-etab');
+  if (!canvas) return;
+  const ctx = setupCanvas(canvas, 160, 160);
+  const C = chartColors();
+
+  const counts = {};
+  participants.forEach(p => {
+    const k = p.etablissement || 'Non renseigné';
+    counts[k] = (counts[k] || 0) + 1;
+  });
+  const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  const total  = sorted.reduce((s, [, v]) => s + v, 0);
+
+  const cx = canvas.width / 2, cy = canvas.height / 2, r = 65, ri = 38;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  let angle = -Math.PI / 2;
+  sorted.forEach(([, val], i) => {
+    const slice = (val / total) * 2 * Math.PI;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.arc(cx, cy, r, angle, angle + slice);
+    ctx.closePath();
+    ctx.fillStyle = C.palette[i % C.palette.length];
+    ctx.fill();
+    angle += slice;
+  });
+
+  // Trou central (donut)
+  ctx.beginPath();
+  ctx.arc(cx, cy, ri, 0, 2 * Math.PI);
+  ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--surface').trim() || '#161920';
+  ctx.fill();
+
+  // Texte central
+  ctx.fillStyle = C.text2;
+  ctx.font = `600 22px IBM Plex Mono, monospace`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(sorted.length, cx, cy - 8);
+  ctx.font = `10px IBM Plex Sans, sans-serif`;
+  ctx.fillStyle = C.text;
+  ctx.fillText('établ.', cx, cy + 10);
+
+  // Légende
+  const legend = document.getElementById('legend-etab');
+  if (legend) {
+    legend.innerHTML = sorted.map(([lbl, val], i) => `
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <div style="width:10px;height:10px;border-radius:2px;background:${C.palette[i % C.palette.length]};flex-shrink:0"></div>
+        <div style="min-width:0">
+          <div style="font-size:12px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${lbl}</div>
+          <div style="font-size:11px;color:var(--text3);font-family:var(--font-mono)">${val} (${Math.round(val/total*100)}%)</div>
+        </div>
+      </div>`).join('');
+  }
+}
+
+function drawVmaChart(participants) {
+  const canvas = document.getElementById('chart-vma');
+  if (!canvas) return;
+  const cssW = canvas.offsetWidth || 600;
+  const cssH = 200;
+  const ctx = setupCanvas(canvas, cssW, cssH);
+  const C = chartColors();
+
+  // Arrondi arithmétique → tranche = Math.round(vma)
+  const withVma = participants.filter(p => p.vma != null);
+  if (!withVma.length) {
+    ctx.fillStyle = C.text;
+    ctx.font = '13px IBM Plex Sans, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Aucune VMA renseignée', canvas.width / 2, canvas.height / 2);
+    return;
+  }
+
+  const counts = {};
+  withVma.forEach(p => {
+    const k = Math.round(p.vma);
+    counts[k] = (counts[k] || 0) + 1;
+  });
+
+  const minKey = Math.min(...Object.keys(counts).map(Number));
+  const maxKey = Math.max(...Object.keys(counts).map(Number));
+  const keys = [];
+  for (let k = minKey; k <= maxKey; k++) keys.push(k);
+  const values = keys.map(k => counts[k] || 0);
+  const max = Math.max(...values);
+
+  const pad = { top: 16, right: 20, bottom: 40, left: 36 };
+  const W = cssW, H = cssH;
+  const chartW = W - pad.left - pad.right;
+  const chartH = H - pad.top - pad.bottom;
+  const barW = (chartW / keys.length) * 0.65;
+  const slotW = chartW / keys.length;
+
+  ctx.clearRect(0, 0, W, H);
+
+  // Grille horizontale
+  const steps = 4;
+  for (let s = 0; s <= steps; s++) {
+    const y = pad.top + chartH - (s / steps) * chartH;
+    ctx.strokeStyle = C.border;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(W - pad.right, y); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = C.text;
+    ctx.font = '10px IBM Plex Mono, monospace';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(Math.round((s / steps) * max), pad.left - 6, y);
+  }
+
+  // Barres
+  keys.forEach((k, i) => {
+    const val = values[i];
+    const x = pad.left + i * slotW + (slotW - barW) / 2;
+    const bh = val > 0 ? (val / max) * chartH : 0;
+    const y = pad.top + chartH - bh;
+
+    // Track
+    ctx.fillStyle = C.surface2;
+    ctx.beginPath(); ctx.roundRect(x, pad.top, barW, chartH, 4); ctx.fill();
+
+    // Bar
+    if (val > 0) {
+      ctx.fillStyle = C.accent;
+      ctx.beginPath(); ctx.roundRect(x, y, barW, bh, 4); ctx.fill();
+
+      // Value on top
+      if (bh > 18) {
+        ctx.fillStyle = '#fff';
+        ctx.font = `600 10px IBM Plex Mono, monospace`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'top';
+        ctx.fillText(val, x + barW / 2, y + 4);
+      } else {
+        ctx.fillStyle = C.text2;
+        ctx.font = `600 10px IBM Plex Mono, monospace`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText(val, x + barW / 2, y - 3);
+      }
+    }
+
+    // X label
+    ctx.fillStyle = C.text;
+    ctx.font = '11px IBM Plex Mono, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillText(k, x + barW / 2, pad.top + chartH + 8);
+  });
+
+  // Axe X label
+  ctx.fillStyle = C.text;
+  ctx.font = '11px IBM Plex Sans, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillText('VMA arrondie (km/h)', W / 2, H - 14);
 }
 
 // ════════════════════════════════════════════════════════════════════════════════
