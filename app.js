@@ -97,11 +97,12 @@ async function refreshData() {
 // ════════════════════════════════════════════════════════════════════════════════
 function render() {
   const titles = {
-    dashboard:  'Tableau de bord',
+    dashboard:    'Tableau de bord',
     participants: 'Participants',
-    courses:    'Gestion des courses',
-    live:       'Course en direct',
-    classement: 'Classement & résultats',
+    courses:      'Gestion des courses',
+    live:         'Course en direct',
+    terminees:    'Courses terminées',
+    classement:   'Classement & résultats',
   };
   document.getElementById('page-title').textContent = titles[state.page] || '';
   document.getElementById('topbar-actions').innerHTML = '';
@@ -111,6 +112,7 @@ function render() {
     participants: renderParticipants,
     courses:      renderCourses,
     live:         renderLive,
+    terminees:    renderTerminees,
     classement:   renderClassement,
   };
   (pages[state.page] || (() => {}))();
@@ -322,8 +324,15 @@ let courseTab = 'liste';
 let selectedCourseDetailId = null;
 let courseParticipants = [];
 
+let showMasquees = false;
+
 async function renderCourses() {
-  document.getElementById('topbar-actions').innerHTML = `<button class="btn btn-primary" onclick="openAddCourse()">+ Nouvelle course</button>`;
+  document.getElementById('topbar-actions').innerHTML = `
+    <button class="btn btn-ghost btn-sm" onclick="showMasquees=!showMasquees;renderCourses()" style="font-size:12px">
+      ${showMasquees ? 'Masquer terminées' : 'Afficher tout'}
+    </button>
+    <button class="btn btn-primary" onclick="openAddCourse()">+ Nouvelle course</button>
+  `;
 
   if (selectedCourseDetailId) {
     const cp = await call('get_course_participants', selectedCourseDetailId);
@@ -332,25 +341,34 @@ async function renderCourses() {
 
   const course = state.courses.find(c => c.id === selectedCourseDetailId);
 
+  // Filtrer : on masque les courses terminées marquées comme masquées (sauf si showMasquees)
+  const visibleCourses = state.courses.filter(c =>
+    showMasquees ? true : !(c.statut === 'terminee' && c.masquee)
+  );
+
   document.getElementById('content').innerHTML = `
     <div class="two-col">
       <div>
         <div class="card">
-          <div class="card-title">Courses créées</div>
-          ${state.courses.length ? `<table>
+          <div class="card-header">
+            <div class="card-title" style="margin-bottom:0">Courses créées</div>
+            ${state.courses.filter(c=>c.masquee).length ? `<span class="badge badge-gray">${state.courses.filter(c=>c.masquee).length} masquée(s)</span>` : ''}
+          </div>
+          ${visibleCourses.length ? `<table>
             <thead><tr><th>Nom</th><th>Distance</th><th>Statut</th><th></th></tr></thead>
-            <tbody>${state.courses.map(c => `
-              <tr style="cursor:pointer;${c.id === selectedCourseDetailId ? 'background:rgba(240,192,64,.05)' : ''}" onclick="selectCourseDetail(${c.id})">
-                <td><strong>${c.nom}</strong></td>
+            <tbody>${visibleCourses.map(c => `
+              <tr style="cursor:pointer;opacity:${c.masquee?'0.5':'1'};${c.id === selectedCourseDetailId ? 'background:rgba(214,10,60,.05)' : ''}" onclick="selectCourseDetail(${c.id})">
+                <td><strong>${c.nom}</strong>${c.masquee ? ' <span style="font-size:10px;color:var(--text3)">(masquée)</span>' : ''}</td>
                 <td style="font-family:var(--font-mono)">${c.distance ? c.distance + 'm' : '—'}</td>
                 <td>${statusBadge(c.statut)}</td>
                 <td style="display:flex;gap:4px">
+                  ${c.statut === 'terminee' ? `<button class="btn btn-ghost btn-sm" title="${c.masquee ? 'Afficher' : 'Masquer'}" onclick="event.stopPropagation();toggleMasquer(${c.id})">${c.masquee ? 'Afficher' : 'Masquer'}</button>` : ''}
                   <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();openEditCourse(${c.id})">✏️</button>
                   <button class="btn btn-danger btn-sm" onclick="event.stopPropagation();deleteCourse(${c.id},'${c.nom}')">🗑️</button>
                 </td>
               </tr>`).join('')}
             </tbody>
-          </table>` : `<div class="empty"><div class="empty-icon">🏁</div><p>Aucune course. Créez-en une !</p></div>`}
+          </table>` : `<div class="empty"><div class="empty-icon">🏁</div><p>Aucune course visible.<br><span style="font-size:12px">Utilisez "Voir toutes" pour afficher les courses masquées.</span></p></div>`}
         </div>
       </div>
 
@@ -403,6 +421,15 @@ async function renderCourses() {
   `;
 
   if (courseTab === 'ajouter' && course) renderAddList();
+}
+
+async function toggleMasquer(cid) {
+  const res = await call('toggle_masquer_course', cid);
+  if (res?.success) {
+    await refreshData();
+    renderCourses();
+    toast(res.masquee ? 'Course masquée' : 'Course affichée');
+  }
 }
 
 function renderAddList() {
@@ -738,6 +765,172 @@ async function assignDossard(arriveeId, dossard) {
   if (res?.success) {
     await loadLiveArrivees();
     toast(`Dossard #${d} assigné`);
+  } else {
+    toast(res?.error || 'Erreur', 'error');
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
+// PAGE : COURSES TERMINÉES
+// ════════════════════════════════════════════════════════════════════════════════
+let termineesSelectedId = null;
+let termineesArrivees = [];
+
+async function renderTerminees() {
+  const courses = await call('get_courses_terminees') || [];
+
+  document.getElementById('topbar-actions').innerHTML = '';
+  document.getElementById('content').innerHTML = `
+    <div class="two-col">
+      <!-- LISTE COURSES TERMINÉES -->
+      <div>
+        <div class="card">
+          <div class="card-title">Courses terminées</div>
+          ${courses.length ? `<table>
+            <thead><tr><th>Nom</th><th>Distance</th><th>Date</th><th></th></tr></thead>
+            <tbody>${courses.map(c => `
+              <tr style="cursor:pointer;${c.id===termineesSelectedId?'background:rgba(214,10,60,.05)':''}" onclick="selectTerminee(${c.id})">
+                <td><strong>${c.nom}</strong></td>
+                <td style="font-family:var(--font-mono)">${c.distance ? c.distance+'m' : '—'}</td>
+                <td style="font-size:12px;color:var(--text3)">${c.finished_at ? c.finished_at.slice(0,16).replace('T',' ') : '—'}</td>
+                <td>
+                  <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();toggleMasquerTerminee(${c.id},${c.masquee})">${c.masquee ? 'Afficher' : 'Masquer'}</button>
+                </td>
+              </tr>`).join('')}
+            </tbody>
+          </table>` : `<div class="empty"><div class="empty-icon">✅</div><p>Aucune course terminée.</p></div>`}
+        </div>
+      </div>
+
+      <!-- ÉDITEUR DE RÉSULTATS -->
+      <div id="terminees-detail">
+        <div class="card">
+          <div class="empty"><div class="empty-icon">👈</div><p>Sélectionnez une course pour modifier ses résultats</p></div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  if (termineesSelectedId) await loadTermineesDetail();
+}
+
+async function selectTerminee(id) {
+  termineesSelectedId = id;
+  await renderTerminees();
+}
+
+async function toggleMasquerTerminee(cid, currentVal) {
+  const res = await call('toggle_masquer_course', cid);
+  if (res?.success) {
+    await refreshData();
+    await renderTerminees();
+    toast(res.masquee ? 'Course masquée dans Gestion' : 'Course visible dans Gestion');
+  }
+}
+
+async function loadTermineesDetail() {
+  const arrs = await call('get_arrivees', termineesSelectedId) || [];
+  termineesArrivees = arrs;
+  const course = state.courses.find(c => c.id === termineesSelectedId)
+    || (await call('get_courses_terminees') || []).find(c => c.id === termineesSelectedId);
+
+  const el = document.getElementById('terminees-detail');
+  if (!el) return;
+
+  el.innerHTML = `
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title" style="margin-bottom:0">${course?.nom || ''}</div>
+        <span class="badge badge-green">✓ Terminée</span>
+      </div>
+      <div class="info-row" style="margin-bottom:16px">
+        <div class="info-item"><div class="lbl">Distance</div><div class="val">${course?.distance ? course.distance+'m' : '—'}</div></div>
+        <div class="info-item"><div class="lbl">Arrivées</div><div class="val">${arrs.length}</div></div>
+      </div>
+
+      <!-- AJOUTER UNE ARRIVÉE -->
+      <div style="background:var(--surface2);border-radius:var(--radius);padding:14px;margin-bottom:16px">
+        <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;font-family:var(--font-mono);margin-bottom:10px">Ajouter une arrivée manquante</div>
+        <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+          <div class="form-group" style="flex:1;min-width:80px">
+            <label>Dossard</label>
+            <input type="number" id="t-dossard" placeholder="N°">
+          </div>
+          <div class="form-group" style="flex:1;min-width:100px">
+            <label>Temps (mm:ss)</label>
+            <input type="text" id="t-temps" placeholder="12:34">
+          </div>
+          <button class="btn btn-success btn-sm" style="margin-bottom:1px" onclick="ajouterArriveeManuelle()">+ Ajouter</button>
+        </div>
+      </div>
+
+      <!-- LISTE DES ARRIVÉES ÉDITABLES -->
+      <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;font-family:var(--font-mono);margin-bottom:8px">
+        Arrivées enregistrées — modifier le dossard ou supprimer
+      </div>
+      <div style="max-height:420px;overflow-y:auto">
+        ${arrs.length ? arrs.map(a => `
+          <div class="arrivee-row" id="trow-${a.id}">
+            <div class="arrivee-order">${a.ordre_arrivee}</div>
+            <div style="flex:1">
+              <div class="arrivee-time">${formatTime(a.temps_secondes || 0)}</div>
+              ${a.nom ? `<div style="font-size:12px;color:var(--green)">✓ ${a.nom} ${a.prenom}</div>` : '<div style="font-size:11px;color:var(--text3)">Dossard non assigné</div>'}
+            </div>
+            <div class="arrivee-dossard">
+              <input type="number" placeholder="${a.dossard_saisi || 'N°'}" id="tedit-${a.id}"
+                value="${a.dossard_saisi || ''}"
+                style="width:70px"
+                onkeydown="if(event.key==='Enter')modifierDossardArrivee(${a.id},this.value)">
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="modifierDossardArrivee(${a.id},document.getElementById('tedit-${a.id}').value)">✓</button>
+            <button class="btn btn-danger btn-sm" onclick="supprimerArrivee(${a.id})" title="Supprimer cette arrivée">🗑️</button>
+          </div>`).join('')
+        : `<div class="empty" style="padding:24px"><p>Aucune arrivée enregistrée pour cette course.</p></div>`}
+      </div>
+    </div>
+  `;
+}
+
+async function ajouterArriveeManuelle() {
+  const dossard = parseInt(document.getElementById('t-dossard').value);
+  const tempsStr = document.getElementById('t-temps').value.trim();
+  if (!dossard) { toast('Dossard requis', 'error'); return; }
+  if (!tempsStr) { toast('Temps requis (mm:ss)', 'error'); return; }
+
+  // Parser mm:ss ou hh:mm:ss
+  const parts = tempsStr.split(':').map(Number);
+  let secs = 0;
+  if (parts.length === 2) secs = parts[0] * 60 + parts[1];
+  else if (parts.length === 3) secs = parts[0] * 3600 + parts[1] * 60 + parts[2];
+  else { toast('Format invalide (mm:ss ou hh:mm:ss)', 'error'); return; }
+
+  const res = await call('ajouter_arrivee_manuelle', termineesSelectedId, secs, dossard);
+  if (res?.success) {
+    toast('Arrivée ajoutée');
+    await loadTermineesDetail();
+  } else {
+    toast(res?.error || 'Erreur', 'error');
+  }
+}
+
+async function modifierDossardArrivee(arriveeId, dossard) {
+  const d = parseInt(dossard);
+  if (!d) { toast('Dossard invalide', 'error'); return; }
+  const res = await call('assigner_dossard_arrivee', arriveeId, d);
+  if (res?.success) {
+    toast(`Dossard #${d} assigné`);
+    await loadTermineesDetail();
+  } else {
+    toast(res?.error || 'Erreur', 'error');
+  }
+}
+
+async function supprimerArrivee(arriveeId) {
+  if (!confirm("Supprimer cette arrivée ? L'ordre sera recalculé.")) return;
+  const res = await call('supprimer_arrivee', arriveeId);
+  if (res?.success) {
+    toast('Arrivée supprimée');
+    await loadTermineesDetail();
   } else {
     toast(res?.error || 'Erreur', 'error');
   }

@@ -72,6 +72,7 @@ def init_db():
             statut TEXT DEFAULT 'preparation',
             started_at TEXT,
             finished_at TEXT,
+            masquee INTEGER DEFAULT 0,
             created_at TEXT DEFAULT (datetime('now'))
         );
 
@@ -95,6 +96,13 @@ def init_db():
         );
     """)
     conn.commit()
+    # Migration : ajouter colonne masquee si elle n'existe pas (base existante)
+    try:
+        conn.execute("ALTER TABLE courses ADD COLUMN masquee INTEGER DEFAULT 0")
+        conn.commit()
+        log.info("init_db() — migration: colonne masquee ajoutée")
+    except Exception:
+        pass  # colonne déjà présente
     log.info("init_db() — OK")
 
 
@@ -450,6 +458,83 @@ class API:
         except Exception as e:
             log.error(f"  ERREUR: {e}\n{traceback.format_exc()}")
             return []
+
+    def toggle_masquer_course(self, cid):
+        log.info(f"API.toggle_masquer_course(cid={cid})")
+        try:
+            conn = get_db()
+            current = conn.execute("SELECT masquee FROM courses WHERE id=?", (cid,)).fetchone()
+            if not current:
+                return {"success": False, "error": "Course introuvable"}
+            new_val = 0 if current["masquee"] else 1
+            conn.execute("UPDATE courses SET masquee=? WHERE id=?", (new_val, cid))
+            conn.commit()
+            log.info(f"  → course {cid} masquee={new_val}")
+            return {"success": True, "masquee": new_val}
+        except Exception as e:
+            log.error(f"  ERREUR: {e}\n{traceback.format_exc()}")
+            return {"success": False, "error": str(e)}
+
+    def get_courses_terminees(self):
+        log.debug("API.get_courses_terminees()")
+        try:
+            conn = get_db()
+            rows = conn.execute(
+                "SELECT * FROM courses WHERE statut='terminee' ORDER BY finished_at DESC"
+            ).fetchall()
+            result = [dict(r) for r in rows]
+            log.debug(f"  → {len(result)} courses terminées")
+            return result
+        except Exception as e:
+            log.error(f"  ERREUR: {e}\n{traceback.format_exc()}")
+            return []
+
+    def supprimer_arrivee(self, arrivee_id):
+        """Supprime une arrivée et réordonne les suivantes."""
+        log.info(f"API.supprimer_arrivee(arrivee_id={arrivee_id})")
+        try:
+            conn = get_db()
+            arrivee = conn.execute("SELECT * FROM arrivees WHERE id=?", (arrivee_id,)).fetchone()
+            if not arrivee:
+                return {"success": False, "error": "Arrivée introuvable"}
+            course_id = arrivee["course_id"]
+            ordre_supprime = arrivee["ordre_arrivee"]
+            conn.execute("DELETE FROM arrivees WHERE id=?", (arrivee_id,))
+            # Réordonner les arrivées suivantes
+            conn.execute(
+                "UPDATE arrivees SET ordre_arrivee = ordre_arrivee - 1 WHERE course_id=? AND ordre_arrivee > ?",
+                (course_id, ordre_supprime)
+            )
+            conn.commit()
+            log.info(f"  → arrivée {arrivee_id} supprimée, ordre recalculé")
+            return {"success": True}
+        except Exception as e:
+            log.error(f"  ERREUR: {e}\n{traceback.format_exc()}")
+            return {"success": False, "error": str(e)}
+
+    def ajouter_arrivee_manuelle(self, course_id, temps_secondes, dossard):
+        """Ajoute une arrivée en fin de liste avec un dossard directement assigné."""
+        log.info(f"API.ajouter_arrivee_manuelle(course_id={course_id}, temps={temps_secondes}, dossard={dossard})")
+        try:
+            conn = get_db()
+            participant = conn.execute(
+                "SELECT id FROM participants WHERE dossard=?", (dossard,)
+            ).fetchone()
+            if not participant:
+                return {"success": False, "error": f"Dossard {dossard} introuvable"}
+            ordre = conn.execute(
+                "SELECT COUNT(*) as cnt FROM arrivees WHERE course_id=?", (course_id,)
+            ).fetchone()["cnt"] + 1
+            conn.execute(
+                "INSERT INTO arrivees (course_id, ordre_arrivee, temps_secondes, dossard_saisi, participant_id) VALUES (?,?,?,?,?)",
+                (course_id, ordre, temps_secondes, dossard, participant["id"])
+            )
+            conn.commit()
+            log.info(f"  → arrivée manuelle #{ordre} ajoutée pour dossard {dossard}")
+            return {"success": True}
+        except Exception as e:
+            log.error(f"  ERREUR: {e}\n{traceback.format_exc()}")
+            return {"success": False, "error": str(e)}
 
     def get_stats(self):
         log.debug("API.get_stats()")
