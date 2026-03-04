@@ -146,13 +146,22 @@ tr:hover td { background: rgba(30,34,48,.6); }
   text-align: center; margin: 12px 0;
 }
 .btn-arrive {
-  width: 100%; padding: 18px; font-size: 18px; font-family: var(--font-display);
-  letter-spacing: 2px; background: var(--accent2); color: #fff; border: none;
+  flex: 1; padding: 18px; font-size: 18px; font-family: var(--font-display);
+  letter-spacing: 2px; background: var(--accent); color: #fff; border: none;
   border-radius: var(--radius); cursor: pointer; transition: all .15s;
-  margin-top: 12px;
+  margin-top: 0;
 }
-.btn-arrive:hover:not(:disabled) { background: #e87050; transform: translateY(-1px); box-shadow: 0 4px 20px rgba(224,90,43,.3); }
+.btn-arrive:hover:not(:disabled) { background: #e0234f; transform: translateY(-1px); box-shadow: 0 4px 20px rgba(214,10,60,.3); }
 .btn-arrive:disabled { opacity: .3; cursor: not-allowed; transform: none; box-shadow: none; }
+
+.btn-arrive-cancel {
+  padding: 0 18px; font-size: 13px; font-family: var(--font); font-weight: 600;
+  letter-spacing: 0.5px; background: transparent; color: var(--text2);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  cursor: pointer; transition: all .15s; white-space: nowrap;
+}
+.btn-arrive-cancel:hover:not(:disabled) { background: var(--red); color: #fff; border-color: var(--red); transform: translateY(-1px); }
+.btn-arrive-cancel:disabled { opacity: .25; cursor: not-allowed; }
 
 .arrivee-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid rgba(42,47,61,.5); }
 .arrivee-order { font-family: var(--font-mono); font-size: 20px; font-weight: 600; color: var(--accent); width: 40px; text-align: right; }

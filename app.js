@@ -768,9 +768,14 @@ function renderLiveBody(course) {
           </div>
           ${isStarted && !isFinished ? `
           <div style="margin-top:24px">
-            <button class="btn-arrive" id="btn-arrive" onclick="recordArrival()">
-              UN PARTICIPANT EST ARRIVÉ
-            </button>
+            <div style="display:flex;align-items:stretch;gap:10px">
+              <button class="btn-arrive-cancel" id="btn-cancel-arrive" onclick="cancelLastArrival()" ${liveArrivees.length === 0 ? 'disabled' : ''} title="Annuler la dernière arrivée">
+                ✕ Annuler
+              </button>
+              <button class="btn-arrive" id="btn-arrive" onclick="recordArrival()">
+                UN PARTICIPANT EST ARRIVÉ
+              </button>
+            </div>
             <div style="font-size:11px;color:var(--text3);margin-top:8px;font-family:var(--font-mono)">
               Appuyez à chaque arrivée — dossard saisi après
             </div>
@@ -866,6 +871,18 @@ async function recordArrival() {
     if (btn) { btn.style.transform = 'scale(0.97)'; setTimeout(() => btn.style.transform='', 150); }
     await loadLiveArrivees();
   }
+}
+async function cancelLastArrival() {
+  if (!liveArrivees.length) return;
+  const last = liveArrivees[liveArrivees.length - 1];
+  if (!confirm(`Annuler l'arrivée #${last.ordre_arrivee} (${formatTime(last.temps_secondes || 0)}) ?`)) return;
+  const res = await call('supprimer_arrivee', last.id);
+  if (res?.success) {
+    const btn = document.getElementById('btn-cancel-arrive');
+    if (btn) { btn.style.transform = 'scale(0.97)'; setTimeout(() => btn.style.transform='', 150); }
+    toast('Dernière arrivée annulée');
+    await loadLiveArrivees();
+  } else { toast(res?.error || 'Erreur', 'error'); }
 }
 async function assignDossard(arriveeId, dossard) {
   const d = parseInt(dossard);
