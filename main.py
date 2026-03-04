@@ -30,7 +30,9 @@ def get_db():
     if _db_conn is None:
         _db_conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=10)
         _db_conn.row_factory = sqlite3.Row
-        log.info("Connexion SQLite initialisée")
+        # Repasser en mode journal classique (supprime les fichiers -wal et -shm)
+        _db_conn.execute("PRAGMA journal_mode=DELETE")
+        log.info("Connexion SQLite initialisée (journal mode: DELETE)")
     return _db_conn
 
 def parse_arg(data):
