@@ -1,3 +1,5 @@
 # Fichiers de base de données et logs
 cross_data.db
 cross_debug.log
+events.db
+races
