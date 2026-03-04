@@ -71,11 +71,16 @@
       </div>
     </nav>
 
-    <!-- Retour aux événements -->
-    <div style="padding:16px 20px;border-top:1px solid var(--border);margin-top:auto">
-      <button class="btn btn-ghost" style="width:100%;justify-content:center" onclick="closeEvenement()">
-        ← Tous les événements
-      </button>
+    <!-- Bas de sidebar -->
+    <div style="margin-top:auto">
+      <div class="nav-item" data-page="parametres" onclick="navigate('parametres')" style="border-top:1px solid var(--border)">
+        <span class="icon">⚙️</span> Paramètres
+      </div>
+      <div style="padding:12px 20px;border-top:1px solid var(--border)">
+        <button class="btn btn-ghost" style="width:100%;justify-content:center" onclick="closeEvenement()">
+          ← Tous les événements
+        </button>
+      </div>
     </div>
   </div>
 

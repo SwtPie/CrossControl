@@ -17,8 +17,19 @@
   --font: 'IBM Plex Sans', sans-serif;
 }
 
+/* ── THÈME CLAIR ── */
+body.theme-light {
+  --bg: #f0f2f7;
+  --surface: #ffffff;
+  --surface2: #e8ebf2;
+  --border: #d0d5e2;
+  --text: #1a1e2e;
+  --text2: #4a526b;
+  --text3: #8a92a8;
+}
+
 * { box-sizing: border-box; margin: 0; padding: 0; }
-html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--font); font-size: 14px; overflow: hidden; }
+html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--font); font-size: 14px; overflow: hidden; transition: background .2s, color .2s; }
 
 /* ── LAYOUT ── */
 #app { display: flex; height: 100vh; }

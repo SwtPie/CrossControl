@@ -223,6 +223,7 @@ function render() {
     live:         'Course en direct',
     terminees:    'Courses terminées',
     classement:   'Classement & résultats',
+    parametres:   'Paramètres',
   };
   document.getElementById('page-title').textContent       = titles[state.page] || '';
   document.getElementById('topbar-actions').innerHTML     = '';
@@ -233,6 +234,7 @@ function render() {
     live:         renderLive,
     terminees:    renderTerminees,
     classement:   renderClassement,
+    parametres:   renderParametres,
   };
   (pages[state.page] || (() => {}))();
 }
@@ -1078,9 +1080,83 @@ async function renderClassement() {
 }
 
 // ════════════════════════════════════════════════════════════════════════════════
+// PAGE : PARAMÈTRES
+// ════════════════════════════════════════════════════════════════════════════════
+function applyTheme(theme) {
+  document.body.classList.toggle('theme-light', theme === 'light');
+  localStorage.setItem('cc-theme', theme);
+}
+
+function renderParametres() {
+  const currentTheme = localStorage.getItem('cc-theme') || 'dark';
+  document.getElementById('content').innerHTML = `
+    <div style="max-width:560px">
+      <div class="card">
+        <div class="card-title">Apparence</div>
+        <div style="font-size:12px;color:var(--text3);margin-bottom:20px;font-family:var(--font-mono);text-transform:uppercase;letter-spacing:1px">Thème de l'interface</div>
+        <div style="display:flex;gap:16px">
+
+          <!-- Thème sombre -->
+          <div id="theme-opt-dark" onclick="applyTheme('dark');renderParametres()"
+            style="flex:1;border:2px solid ${currentTheme==='dark' ? 'var(--accent)' : 'var(--border)'};border-radius:8px;padding:16px;cursor:pointer;transition:border-color .15s;background:${currentTheme==='dark' ? 'rgba(214,10,60,.05)' : 'transparent'}">
+            <div style="background:#0d0f14;border-radius:6px;height:80px;margin-bottom:12px;border:1px solid #2a2f3d;display:flex;flex-direction:column;overflow:hidden">
+              <div style="background:#161920;height:18px;border-bottom:1px solid #2a2f3d;display:flex;align-items:center;padding:0 8px;gap:4px">
+                <div style="width:24px;height:6px;background:#d60a3c;border-radius:2px"></div>
+                <div style="flex:1;height:4px;background:#2a2f3d;border-radius:2px"></div>
+              </div>
+              <div style="display:flex;flex:1">
+                <div style="width:36px;background:#161920;border-right:1px solid #2a2f3d"></div>
+                <div style="flex:1;padding:6px;display:flex;flex-direction:column;gap:4px">
+                  <div style="height:6px;background:#2a2f3d;border-radius:2px;width:70%"></div>
+                  <div style="height:6px;background:#2a2f3d;border-radius:2px;width:50%"></div>
+                </div>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <div style="width:16px;height:16px;border-radius:50%;border:2px solid ${currentTheme==='dark' ? 'var(--accent)' : 'var(--border)'};display:flex;align-items:center;justify-content:center">
+                ${currentTheme==='dark' ? '<div style="width:8px;height:8px;border-radius:50%;background:var(--accent)"></div>' : ''}
+              </div>
+              <span style="font-weight:600;font-size:13px">Sombre</span>
+            </div>
+          </div>
+
+          <!-- Thème clair -->
+          <div id="theme-opt-light" onclick="applyTheme('light');renderParametres()"
+            style="flex:1;border:2px solid ${currentTheme==='light' ? 'var(--accent)' : 'var(--border)'};border-radius:8px;padding:16px;cursor:pointer;transition:border-color .15s;background:${currentTheme==='light' ? 'rgba(214,10,60,.05)' : 'transparent'}">
+            <div style="background:#f0f2f7;border-radius:6px;height:80px;margin-bottom:12px;border:1px solid #d0d5e2;display:flex;flex-direction:column;overflow:hidden">
+              <div style="background:#ffffff;height:18px;border-bottom:1px solid #d0d5e2;display:flex;align-items:center;padding:0 8px;gap:4px">
+                <div style="width:24px;height:6px;background:#d60a3c;border-radius:2px"></div>
+                <div style="flex:1;height:4px;background:#d0d5e2;border-radius:2px"></div>
+              </div>
+              <div style="display:flex;flex:1">
+                <div style="width:36px;background:#ffffff;border-right:1px solid #d0d5e2"></div>
+                <div style="flex:1;padding:6px;display:flex;flex-direction:column;gap:4px">
+                  <div style="height:6px;background:#d0d5e2;border-radius:2px;width:70%"></div>
+                  <div style="height:6px;background:#d0d5e2;border-radius:2px;width:50%"></div>
+                </div>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <div style="width:16px;height:16px;border-radius:50%;border:2px solid ${currentTheme==='light' ? 'var(--accent)' : 'var(--border)'};display:flex;align-items:center;justify-content:center">
+                ${currentTheme==='light' ? '<div style="width:8px;height:8px;border-radius:50%;background:var(--accent)"></div>' : ''}
+              </div>
+              <span style="font-weight:600;font-size:13px">Clair</span>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
 // INIT
 // ════════════════════════════════════════════════════════════════════════════════
 async function init() {
+  // Restaurer le thème sauvegardé
+  const savedTheme = localStorage.getItem('cc-theme') || 'dark';
+  applyTheme(savedTheme);
   showScreen('events');
   await renderEvents();
 }
