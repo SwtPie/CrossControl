@@ -585,6 +585,202 @@ class API:
         except Exception as e:
             log.error(f"  ERREUR: {e}"); return []
 
+
+    # ─── IMPORT PARTICIPANTS ──────────────────────────────────────────────────────
+
+    def parse_import_file(self, file_b64, filename, etablissement_override=""):
+        """
+        Reçoit un fichier CSV ou XLSX encodé en base64.
+        Retourne un aperçu : liste de lignes avec statut (ok / warning / doublon / erreur).
+        """
+        import base64, io, csv
+        log.info(f"API.parse_import_file() filename={filename}")
+        try:
+            raw = base64.b64decode(file_b64)
+            ext = filename.rsplit(".", 1)[-1].lower()
+
+            rows_raw = []
+
+            if ext == "csv":
+                # Détecter le séparateur
+                sample = raw[:2048].decode("utf-8-sig", errors="replace")
+                dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
+                reader = csv.DictReader(
+                    io.StringIO(raw.decode("utf-8-sig", errors="replace")),
+                    dialect=dialect
+                )
+                for r in reader:
+                    rows_raw.append({k.strip().lower(): v.strip() for k, v in r.items()})
+
+            elif ext in ("xlsx", "xls"):
+                try:
+                    import openpyxl
+                    wb = openpyxl.load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
+                    ws = wb.active
+                    rows_iter = iter(ws.iter_rows(values_only=True))
+                    headers = [str(c).strip().lower() if c else "" for c in next(rows_iter)]
+                    for row in rows_iter:
+                        rows_raw.append({headers[i]: (str(v).strip() if v is not None else "") for i, v in enumerate(row)})
+                except ImportError:
+                    return {"success": False, "error": "openpyxl non installé (pip install openpyxl)"}
+            else:
+                return {"success": False, "error": f"Format non supporté : .{ext}"}
+
+            # Mapping flexible des colonnes
+            ALIASES = {
+                "nom":           ["nom", "name", "last_name", "lastname", "family_name"],
+                "prenom":        ["prenom", "prénom", "first_name", "firstname", "given_name"],
+                "classe":        ["classe", "class", "group", "groupe", "level", "niveau"],
+                "etablissement": ["etablissement", "établissement", "school", "ecole", "école", "structure"],
+                "sexe":          ["sexe", "genre", "sex", "gender", "m/f"],
+                "vma":           ["vma", "vma (km/h)", "vitesse", "speed"],
+                "dossard":       ["dossard", "bib", "numero", "numéro", "n°", "num"],
+            }
+
+            def map_col(row, field):
+                for alias in ALIASES[field]:
+                    for k in row:
+                        if k == alias or k.strip("'\"\t ") == alias:
+                            return row[k]
+                return ""
+
+            def normalize_name(s):
+                """Title case + gestion des noms composés"""
+                if not s:
+                    return ""
+                return " ".join(w.capitalize() for w in s.strip().split())
+
+            def normalize_sexe(s):
+                s = s.strip().upper()
+                if s in ("F", "FEMININ", "FÉMININ", "FEMALE", "FILLE"):
+                    return "F"
+                if s in ("M", "MASCULIN", "MALE", "GARCON", "GARÇON"):
+                    return "M"
+                return ""
+
+            # Participants déjà en base pour détection des doublons
+            conn = get_event_db()
+            existing = conn.execute("SELECT nom, prenom, classe FROM participants").fetchall()
+            existing_set = {(r["nom"].lower(), r["prenom"].lower()) for r in existing}
+
+            result = []
+            for i, raw_row in enumerate(rows_raw):
+                nom    = normalize_name(map_col(raw_row, "nom"))
+                prenom = normalize_name(map_col(raw_row, "prenom"))
+
+                if not nom and not prenom:
+                    continue  # ligne vide, on ignore
+
+                warnings = []
+                statut   = "ok"
+
+                if not nom:
+                    statut = "erreur"
+                    warnings.append("Nom manquant")
+                if not prenom:
+                    statut = "erreur"
+                    warnings.append("Prénom manquant")
+
+                # Doublon
+                if nom and prenom and (nom.lower(), prenom.lower()) in existing_set:
+                    statut = "doublon"
+                    warnings.append("Déjà présent dans l'événement")
+
+                # Établissement
+                etab = etablissement_override.strip() if etablissement_override.strip() else normalize_name(map_col(raw_row, "etablissement"))
+
+                # VMA
+                vma_raw = map_col(raw_row, "vma").replace(",", ".")
+                vma = None
+                try:
+                    vma = float(vma_raw) if vma_raw else None
+                except ValueError:
+                    warnings.append("VMA invalide ignorée")
+                if vma is None and statut == "ok":
+                    statut = "warning"
+                    warnings.append("VMA manquante")
+
+                # Sexe
+                sexe = normalize_sexe(map_col(raw_row, "sexe"))
+                if not sexe and statut == "ok":
+                    statut = "warning"
+                    warnings.append("Sexe non renseigné")
+
+                # Dossard
+                dossard_raw = map_col(raw_row, "dossard")
+                dossard = None
+                try:
+                    dossard = int(dossard_raw) if dossard_raw else None
+                except ValueError:
+                    pass
+
+                # Classe
+                classe = map_col(raw_row, "classe").strip()
+
+                result.append({
+                    "index":         i,
+                    "nom":           nom,
+                    "prenom":        prenom,
+                    "classe":        classe,
+                    "etablissement": etab,
+                    "sexe":          sexe,
+                    "vma":           vma,
+                    "dossard":       dossard,
+                    "statut":        statut,
+                    "warnings":      warnings,
+                })
+
+            counts = {
+                "total":    len(result),
+                "ok":       sum(1 for r in result if r["statut"] == "ok"),
+                "warning":  sum(1 for r in result if r["statut"] == "warning"),
+                "doublon":  sum(1 for r in result if r["statut"] == "doublon"),
+                "erreur":   sum(1 for r in result if r["statut"] == "erreur"),
+            }
+
+            return {"success": True, "rows": result, "counts": counts}
+
+        except Exception as e:
+            log.error(f"parse_import_file ERREUR: {e}\n{traceback.format_exc()}")
+            return {"success": False, "error": str(e)}
+
+    def confirm_import(self, rows, skip_doublons=True):
+        """
+        Insère en base les lignes validées (statut != erreur, doublons selon option).
+        """
+        log.info(f"API.confirm_import() nb_rows={len(rows)}")
+        try:
+            rows = parse_arg(rows) if isinstance(rows, str) else rows
+            conn = get_event_db()
+            imported = 0
+            skipped  = 0
+            errors   = []
+
+            for r in rows:
+                statut = r.get("statut", "ok")
+                if statut == "erreur":
+                    skipped += 1
+                    continue
+                if statut == "doublon" and skip_doublons:
+                    skipped += 1
+                    continue
+                try:
+                    conn.execute(
+                        "INSERT INTO participants (nom, prenom, classe, etablissement, sexe, vma, dossard) VALUES (?,?,?,?,?,?,?)",
+                        (r["nom"], r["prenom"], r.get("classe",""), r.get("etablissement",""),
+                         r.get("sexe",""), r.get("vma"), r.get("dossard"))
+                    )
+                    imported += 1
+                except sqlite3.IntegrityError:
+                    errors.append(f"Dossard {r.get('dossard')} déjà attribué — {r['nom']} {r['prenom']} ignoré")
+                    skipped += 1
+
+            conn.commit()
+            return {"success": True, "imported": imported, "skipped": skipped, "errors": errors}
+        except Exception as e:
+            log.error(f"confirm_import ERREUR: {e}\n{traceback.format_exc()}")
+            return {"success": False, "error": str(e)}
+
     def get_stats(self):
         try:
             conn = get_event_db()

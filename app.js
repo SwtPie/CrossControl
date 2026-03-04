@@ -320,6 +320,7 @@ function renderDashboard() {
 function renderParticipants() {
   document.getElementById('topbar-actions').innerHTML = `
     <button class="btn btn-ghost btn-sm" onclick="autoAssignDossards()">Auto-dossards</button>
+    <button class="btn btn-ghost btn-sm" onclick="openImportModal()">📥 Importer</button>
     <button class="btn btn-primary" onclick="openAddParticipant()">+ Ajouter</button>
   `;
   // Ne recréer la structure que si elle n'existe pas encore (évite de perdre le focus sur l'input)
@@ -1372,6 +1373,149 @@ function drawVmaChart(participants) {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
   ctx.fillText('VMA arrondie (km/h)', W / 2, H - 14);
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
+// IMPORT PARTICIPANTS
+// ════════════════════════════════════════════════════════════════════════════════
+let importParsedRows = [];
+let importCurrentFile = null;
+
+function openImportModal() {
+  importParsedRows = [];
+  importCurrentFile = null;
+  document.getElementById('import-file-info').textContent = '';
+  document.getElementById('import-etab-override').value = '';
+  document.getElementById('import-step-1').classList.remove('hidden');
+  document.getElementById('import-step-2').classList.add('hidden');
+  document.getElementById('import-confirm-btn').classList.add('hidden');
+  document.getElementById('import-back-btn').classList.add('hidden');
+  const dz = document.getElementById('import-dropzone');
+  dz.style.borderColor = '';
+  dz.style.background = '';
+  openModal('modal-import');
+}
+
+function handleImportDrop(e) {
+  e.preventDefault();
+  const dz = document.getElementById('import-dropzone');
+  dz.style.borderColor = '';
+  dz.style.background = '';
+  const file = e.dataTransfer.files[0];
+  if (file) handleImportFile(file);
+}
+
+function handleImportFile(file) {
+  if (!file) return;
+  const ext = file.name.split('.').pop().toLowerCase();
+  if (!['csv', 'xlsx', 'xls'].includes(ext)) {
+    toast('Format non supporté. Utilisez CSV ou XLSX.', 'error');
+    return;
+  }
+  importCurrentFile = file;
+  document.getElementById('import-file-info').textContent = `📄 ${file.name} (${(file.size/1024).toFixed(1)} Ko)`;
+  parseImportFile();
+}
+
+function onImportEtabChange() {
+  if (importCurrentFile) parseImportFile();
+}
+
+async function parseImportFile() {
+  if (!importCurrentFile) return;
+  const etab = document.getElementById('import-etab-override').value.trim();
+  const info = document.getElementById('import-file-info');
+  info.textContent = `⏳ Analyse de ${importCurrentFile.name}…`;
+
+  const b64 = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = e => resolve(e.target.result.split(',')[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(importCurrentFile);
+  });
+
+  const res = await call('parse_import_file', b64, importCurrentFile.name, etab);
+
+  if (!res?.success) {
+    info.textContent = `❌ ${res?.error || 'Erreur lors de l\'analyse'}`;
+    toast(res?.error || 'Erreur', 'error');
+    return;
+  }
+
+  importParsedRows = res.rows;
+  info.textContent = `✓ ${importCurrentFile.name}`;
+  renderImportPreview(res.rows, res.counts);
+}
+
+function renderImportPreview(rows, counts) {
+  // Résumé
+  const summary = document.getElementById('import-summary');
+  summary.innerHTML = [
+    ['total',   `${counts.total} lignes`,          'badge-gray'],
+    ['ok',      `${counts.ok} valides`,             'badge-green'],
+    ['warning', `${counts.warning} avertissements`, 'badge-yellow'],
+    ['doublon', `${counts.doublon} doublons`,        'badge-orange'],
+    ['erreur',  `${counts.erreur} erreurs`,          'badge-red'],
+  ].filter(([k]) => k === 'total' || counts[k] > 0)
+   .map(([, lbl, cls]) => `<span class="badge ${cls}" style="font-size:12px;padding:5px 10px">${lbl}</span>`)
+   .join('');
+
+  // Couleur de ligne par statut
+  const rowColor = { ok: '', warning: 'rgba(214,10,60,.04)', doublon: 'rgba(224,90,43,.08)', erreur: 'rgba(224,90,90,.1)' };
+  const statusIcon = { ok: '', warning: '⚠️', doublon: '🔁', erreur: '❌' };
+
+  const tbody = document.getElementById('import-preview-body');
+  tbody.innerHTML = rows.map(r => `
+    <tr style="background:${rowColor[r.statut] || ''}">
+      <td style="text-align:center;font-size:14px">${statusIcon[r.statut] || ''}</td>
+      <td><strong>${r.nom || '<span style="color:var(--red)">—</span>'}</strong></td>
+      <td>${r.prenom || '<span style="color:var(--red)">—</span>'}</td>
+      <td>${r.classe || '<span style="color:var(--text3)">—</span>'}</td>
+      <td>${r.etablissement || '<span style="color:var(--text3)">—</span>'}</td>
+      <td>${r.sexe || '<span style="color:var(--text3)">—</span>'}</td>
+      <td style="font-family:var(--font-mono)">${r.vma != null ? r.vma : '<span style="color:var(--text3)">—</span>'}</td>
+      <td style="font-family:var(--font-mono)">${r.dossard != null ? r.dossard : '<span style="color:var(--text3)">—</span>'}</td>
+      <td style="font-size:11px;color:var(--text3)">${r.warnings.join(', ')}</td>
+    </tr>`).join('');
+
+  // Afficher étape 2
+  document.getElementById('import-step-1').classList.add('hidden');
+  document.getElementById('import-step-2').classList.remove('hidden');
+  document.getElementById('import-confirm-btn').classList.remove('hidden');
+  document.getElementById('import-back-btn').classList.remove('hidden');
+
+  const canImport = counts.ok + counts.warning + counts.doublon > 0;
+  document.getElementById('import-confirm-btn').disabled = !canImport;
+}
+
+function importGoBack() {
+  document.getElementById('import-step-1').classList.remove('hidden');
+  document.getElementById('import-step-2').classList.add('hidden');
+  document.getElementById('import-confirm-btn').classList.add('hidden');
+  document.getElementById('import-back-btn').classList.add('hidden');
+}
+
+async function confirmImport() {
+  const skipDoublons = document.getElementById('import-skip-doublons').checked;
+  const btn = document.getElementById('import-confirm-btn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Import en cours…';
+
+  const res = await call('confirm_import', importParsedRows, skipDoublons);
+
+  btn.disabled = false;
+  btn.textContent = '✅ Importer';
+
+  if (res?.success) {
+    closeModal('modal-import');
+    const msg = `${res.imported} participant(s) importé(s)${res.skipped ? `, ${res.skipped} ignoré(s)` : ''}${res.errors?.length ? ` — ${res.errors.length} erreur(s)` : ''}`;
+    toast(msg);
+    if (res.errors?.length) res.errors.forEach(e => console.warn('[Import]', e));
+    await refreshData();
+    renderParticipants();
+  } else {
+    toast(res?.error || 'Erreur lors de l\'import', 'error');
+  }
 }
 
 // ════════════════════════════════════════════════════════════════════════════════
