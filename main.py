@@ -781,6 +781,195 @@ class API:
             log.error(f"confirm_import ERREUR: {e}\n{traceback.format_exc()}")
             return {"success": False, "error": str(e)}
 
+
+    # ─── EXPORT PDF ──────────────────────────────────────────────────────────────
+
+    def export_pdf_participants(self):
+        """Export PDF de tous les participants de l'événement."""
+        log.info("API.export_pdf_participants()")
+        try:
+            from reportlab.lib.pagesizes import A4
+            from reportlab.lib import colors
+            from reportlab.lib.units import mm
+            from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+            from reportlab.lib.styles import ParagraphStyle
+            from reportlab.lib.enums import TA_LEFT, TA_CENTER
+
+            conn  = get_event_db()
+            rows  = conn.execute("SELECT * FROM participants ORDER BY dossard, nom, prenom").fetchall()
+            event = _event_info or {}
+
+            exports_dir = os.path.join(BASE_DIR, "exports")
+            os.makedirs(exports_dir, exist_ok=True)
+            filename = f"participants_{event.get('nom','export')}.pdf".replace(" ", "_")
+            path = os.path.join(exports_dir, filename)
+
+            doc = SimpleDocTemplate(path, pagesize=A4,
+                leftMargin=15*mm, rightMargin=15*mm,
+                topMargin=15*mm, bottomMargin=15*mm)
+
+            story = []
+
+            # Styles
+            title_style = ParagraphStyle("title", fontSize=18, fontName="Helvetica-Bold",
+                spaceAfter=2*mm, textColor=colors.HexColor("#d60a3c"))
+            sub_style   = ParagraphStyle("sub", fontSize=9, fontName="Helvetica",
+                spaceAfter=6*mm, textColor=colors.HexColor("#555d72"))
+            info_style  = ParagraphStyle("info", fontSize=9, fontName="Helvetica",
+                spaceAfter=4*mm, textColor=colors.HexColor("#333"))
+
+            story.append(Paragraph("CROSSCONTROL", title_style))
+            story.append(Paragraph(f"Liste des participants — {event.get('nom', '')}", sub_style))
+            if event.get("date"):
+                story.append(Paragraph(f"Date : {event['date']}  |  Lieu : {event.get('lieu', '—')}  |  {len(rows)} participant(s)", info_style))
+            story.append(Spacer(1, 4*mm))
+
+            # Tableau
+            headers = ["Dossard", "Nom", "Prénom", "Classe", "Établissement", "Sexe", "VMA"]
+            data = [headers]
+            for r in rows:
+                data.append([
+                    str(r["dossard"]) if r["dossard"] else "—",
+                    r["nom"] or "—",
+                    r["prenom"] or "—",
+                    r["classe"] or "—",
+                    r["etablissement"] or "—",
+                    r["sexe"] or "—",
+                    str(r["vma"]) if r["vma"] else "—",
+                ])
+
+            col_widths = [18*mm, 35*mm, 35*mm, 22*mm, 45*mm, 14*mm, 14*mm]
+            t = Table(data, colWidths=col_widths, repeatRows=1)
+            t.setStyle(TableStyle([
+                # En-tête
+                ("BACKGROUND",   (0,0), (-1,0),  colors.HexColor("#161920")),
+                ("TEXTCOLOR",    (0,0), (-1,0),  colors.HexColor("#d60a3c")),
+                ("FONTNAME",     (0,0), (-1,0),  "Helvetica-Bold"),
+                ("FONTSIZE",     (0,0), (-1,0),  8),
+                ("BOTTOMPADDING",(0,0), (-1,0),  4*mm),
+                ("TOPPADDING",   (0,0), (-1,0),  3*mm),
+                # Corps
+                ("FONTNAME",     (0,1), (-1,-1), "Helvetica"),
+                ("FONTSIZE",     (0,1), (-1,-1), 8),
+                ("TOPPADDING",   (0,1), (-1,-1), 2.5*mm),
+                ("BOTTOMPADDING",(0,1), (-1,-1), 2.5*mm),
+                ("ROWBACKGROUNDS",(0,1),(-1,-1), [colors.HexColor("#f7f7f7"), colors.white]),
+                ("TEXTCOLOR",    (0,1), (-1,-1), colors.HexColor("#1a1e2e")),
+                # Grille
+                ("GRID",         (0,0), (-1,-1), 0.3, colors.HexColor("#d0d5e2")),
+                ("LINEBELOW",    (0,0), (-1,0),  1,   colors.HexColor("#d60a3c")),
+                ("ALIGN",        (0,0), (0,-1),  "CENTER"),
+                ("ALIGN",        (5,0), (6,-1),  "CENTER"),
+            ]))
+            story.append(t)
+
+            doc.build(story)
+            log.info(f"PDF généré : {path}")
+
+            import subprocess
+            subprocess.Popen(["explorer", path] if os.name == "nt" else ["xdg-open", path])
+            return {"success": True, "path": path}
+
+        except Exception as e:
+            log.error(f"export_pdf_participants ERREUR: {e}\n{traceback.format_exc()}")
+            return {"success": False, "error": str(e)}
+
+    def export_pdf_course(self, course_id):
+        """Export PDF des participants d'une course spécifique."""
+        log.info(f"API.export_pdf_course(course_id={course_id})")
+        try:
+            from reportlab.lib.pagesizes import A4
+            from reportlab.lib import colors
+            from reportlab.lib.units import mm
+            from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+            from reportlab.lib.styles import ParagraphStyle
+
+            conn   = get_event_db()
+            course = conn.execute("SELECT * FROM courses WHERE id=?", (course_id,)).fetchone()
+            if not course:
+                return {"success": False, "error": "Course introuvable"}
+
+            rows = conn.execute("""
+                SELECT p.* FROM participants p
+                JOIN course_participants cp ON cp.participant_id = p.id
+                WHERE cp.course_id = ? ORDER BY p.dossard, p.nom
+            """, (course_id,)).fetchall()
+
+            event = _event_info or {}
+
+            exports_dir = os.path.join(BASE_DIR, "exports")
+            os.makedirs(exports_dir, exist_ok=True)
+            filename = f"course_{course['nom']}.pdf".replace(" ", "_")
+            path = os.path.join(exports_dir, filename)
+
+            doc = SimpleDocTemplate(path, pagesize=A4,
+                leftMargin=15*mm, rightMargin=15*mm,
+                topMargin=15*mm, bottomMargin=15*mm)
+
+            story = []
+
+            title_style = ParagraphStyle("title", fontSize=18, fontName="Helvetica-Bold",
+                spaceAfter=2*mm, textColor=colors.HexColor("#d60a3c"))
+            sub_style   = ParagraphStyle("sub", fontSize=9, fontName="Helvetica",
+                spaceAfter=3*mm, textColor=colors.HexColor("#555d72"))
+            info_style  = ParagraphStyle("info", fontSize=9, fontName="Helvetica",
+                spaceAfter=6*mm, textColor=colors.HexColor("#333"))
+
+            story.append(Paragraph("CROSSCONTROL", title_style))
+            story.append(Paragraph(f"{course['nom']} — {event.get('nom', '')}", sub_style))
+
+            meta = []
+            if course["distance"]: meta.append(f"Distance : {course['distance']}m")
+            if course["vma_min"] and course["vma_max"]: meta.append(f"VMA : {course['vma_min']}–{course['vma_max']} km/h")
+            meta.append(f"{len(rows)} participant(s)")
+            story.append(Paragraph("  |  ".join(meta), info_style))
+
+            headers = ["Dossard", "Nom", "Prénom", "Classe", "Établissement", "Sexe", "VMA"]
+            data = [headers]
+            for r in rows:
+                data.append([
+                    str(r["dossard"]) if r["dossard"] else "—",
+                    r["nom"] or "—",
+                    r["prenom"] or "—",
+                    r["classe"] or "—",
+                    r["etablissement"] or "—",
+                    r["sexe"] or "—",
+                    str(r["vma"]) if r["vma"] else "—",
+                ])
+
+            col_widths = [18*mm, 35*mm, 35*mm, 22*mm, 45*mm, 14*mm, 14*mm]
+            t = Table(data, colWidths=col_widths, repeatRows=1)
+            t.setStyle(TableStyle([
+                ("BACKGROUND",   (0,0), (-1,0),  colors.HexColor("#161920")),
+                ("TEXTCOLOR",    (0,0), (-1,0),  colors.HexColor("#d60a3c")),
+                ("FONTNAME",     (0,0), (-1,0),  "Helvetica-Bold"),
+                ("FONTSIZE",     (0,0), (-1,0),  8),
+                ("BOTTOMPADDING",(0,0), (-1,0),  4*mm),
+                ("TOPPADDING",   (0,0), (-1,0),  3*mm),
+                ("FONTNAME",     (0,1), (-1,-1), "Helvetica"),
+                ("FONTSIZE",     (0,1), (-1,-1), 8),
+                ("TOPPADDING",   (0,1), (-1,-1), 2.5*mm),
+                ("BOTTOMPADDING",(0,1), (-1,-1), 2.5*mm),
+                ("ROWBACKGROUNDS",(0,1),(-1,-1), [colors.HexColor("#f7f7f7"), colors.white]),
+                ("TEXTCOLOR",    (0,1), (-1,-1), colors.HexColor("#1a1e2e")),
+                ("GRID",         (0,0), (-1,-1), 0.3, colors.HexColor("#d0d5e2")),
+                ("LINEBELOW",    (0,0), (-1,0),  1,   colors.HexColor("#d60a3c")),
+                ("ALIGN",        (0,0), (0,-1),  "CENTER"),
+                ("ALIGN",        (5,0), (6,-1),  "CENTER"),
+            ]))
+            story.append(t)
+
+            doc.build(story)
+            log.info(f"PDF généré : {path}")
+
+            import subprocess
+            subprocess.Popen(["explorer", path] if os.name == "nt" else ["xdg-open", path])
+            return {"success": True, "path": path}
+
+        except Exception as e:
+            log.error(f"export_pdf_course ERREUR: {e}\n{traceback.format_exc()}")
+            return {"success": False, "error": str(e)}
+
     def get_stats(self):
         try:
             conn = get_event_db()

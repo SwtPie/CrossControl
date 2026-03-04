@@ -321,6 +321,7 @@ function renderParticipants() {
   document.getElementById('topbar-actions').innerHTML = `
     <button class="btn btn-ghost btn-sm" onclick="autoAssignDossards()">Auto-dossards</button>
     <button class="btn btn-ghost btn-sm" onclick="openImportModal()">📥 Importer</button>
+    <button class="btn btn-ghost btn-sm" onclick="exportPdfParticipants()">📄 PDF</button>
     <button class="btn btn-primary" onclick="openAddParticipant()">+ Ajouter</button>
   `;
   // Ne recréer la structure que si elle n'existe pas encore (évite de perdre le focus sur l'input)
@@ -503,6 +504,7 @@ async function renderCourses() {
           </div>
           <div style="margin-bottom:16px">
             <button class="btn btn-blue btn-sm" onclick="openAjoutRapide(${course.id})">⚡ Ajout rapide</button>
+            <button class="btn btn-ghost btn-sm" onclick="exportPdfCourse(${course.id})">📄 PDF</button>
           </div>
           <div class="tabs">
             <div class="tab ${courseTab==='liste'?'active':''}" onclick="courseTab='liste';renderCourses()">Inscrits (${courseParticipants.length})</div>
@@ -1373,6 +1375,29 @@ function drawVmaChart(participants) {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
   ctx.fillText('VMA arrondie (km/h)', W / 2, H - 14);
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
+// EXPORT PDF
+// ════════════════════════════════════════════════════════════════════════════════
+async function exportPdfParticipants() {
+  toast('Génération du PDF…');
+  const res = await call('export_pdf_participants');
+  if (res?.success) {
+    toast('PDF généré et ouvert');
+  } else {
+    toast(res?.error || 'Erreur lors de la génération', 'error');
+  }
+}
+
+async function exportPdfCourse(courseId) {
+  toast('Génération du PDF…');
+  const res = await call('export_pdf_course', courseId);
+  if (res?.success) {
+    toast('PDF généré et ouvert');
+  } else {
+    toast(res?.error || 'Erreur lors de la génération', 'error');
+  }
 }
 
 // ════════════════════════════════════════════════════════════════════════════════
