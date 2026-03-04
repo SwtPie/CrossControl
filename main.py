@@ -491,11 +491,11 @@ def main():
     html_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app.html")
     log.info(f"HTML : {html_path}")
     window = webview.create_window(
-        "🏃 Gestionnaire de Cross",
+        "CrossControl",
         html_path,
         js_api=api,
-        width=1280,
-        height=800,
+        width=1920,
+        height=1080,
         min_size=(900, 600)
     )
     log.info("Lancement de webview.start(debug=True)")
