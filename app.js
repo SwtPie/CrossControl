@@ -318,38 +318,51 @@ function renderParticipants() {
     <button class="btn btn-ghost btn-sm" onclick="autoAssignDossards()">Auto-dossards</button>
     <button class="btn btn-primary" onclick="openAddParticipant()">+ Ajouter</button>
   `;
-  const filtered = state.participants.filter(p => {
-    const q = state.filterSearch.toLowerCase();
-    return !q || `${p.nom} ${p.prenom} ${p.classe} ${p.etablissement}`.toLowerCase().includes(q);
-  });
-  document.getElementById('content').innerHTML = `
-    <div class="search-bar">
-      <input type="text" placeholder="Rechercher…" value="${state.filterSearch}"
-        oninput="state.filterSearch=this.value;renderParticipants()">
-      <span style="font-size:12px;color:var(--text3);align-self:center;white-space:nowrap">${filtered.length} / ${state.participants.length}</span>
-    </div>
-    <div class="card">
-      <table>
-        <thead><tr><th>Dossard</th><th>Nom</th><th>Prénom</th><th>Classe</th><th>Établissement</th><th>Sexe</th><th>VMA</th><th></th></tr></thead>
-        <tbody>
-          ${filtered.length ? filtered.map(p => `
-            <tr>
-              <td><span class="badge badge-yellow" style="font-family:var(--font-mono)">${p.dossard ?? '—'}</span></td>
-              <td><strong>${p.nom}</strong></td>
-              <td>${p.prenom}</td>
-              <td>${p.classe || '—'}</td>
-              <td>${p.etablissement || '—'}</td>
-              <td>${p.sexe === 'F' ? 'F' : p.sexe === 'M' ? 'M' : '—'}</td>
-              <td><span class="badge badge-${vmaColor(p.vma)}">${p.vma ?? '—'}</span></td>
-              <td style="display:flex;gap:6px">
-                <button class="btn btn-ghost btn-sm" onclick="openEditParticipant(${p.id})">Modifier</button>
-                <button class="btn btn-danger btn-sm" onclick="deleteParticipant(${p.id},'${p.nom} ${p.prenom}')">Suppr.</button>
-              </td>
-            </tr>`).join('')
-          : `<tr><td colspan="8" style="text-align:center;color:var(--text3);padding:32px">Aucun participant</td></tr>`}
-        </tbody>
-      </table>
-    </div>
+  // Ne recréer la structure que si elle n'existe pas encore (évite de perdre le focus sur l'input)
+  if (!document.getElementById('participants-table-container')) {
+    document.getElementById('content').innerHTML = `
+      <div class="search-bar">
+        <input type="text" id="participants-search" placeholder="Rechercher…"
+          oninput="state.filterSearch=this.value;_renderParticipantsTable()">
+        <span id="participants-count" style="font-size:12px;color:var(--text3);align-self:center;white-space:nowrap"></span>
+      </div>
+      <div class="card" id="participants-table-container"></div>
+    `;
+    document.getElementById('participants-search').value = state.filterSearch;
+  }
+  _renderParticipantsTable();
+}
+
+function _renderParticipantsTable() {
+  const q = state.filterSearch.toLowerCase();
+  const filtered = state.participants.filter(p =>
+    !q || `${p.nom} ${p.prenom} ${p.classe} ${p.etablissement}`.toLowerCase().includes(q)
+  );
+  const count = document.getElementById('participants-count');
+  if (count) count.textContent = `${filtered.length} / ${state.participants.length}`;
+  const container = document.getElementById('participants-table-container');
+  if (!container) return;
+  container.innerHTML = `
+    <table>
+      <thead><tr><th>Dossard</th><th>Nom</th><th>Prénom</th><th>Classe</th><th>Établissement</th><th>Sexe</th><th>VMA</th><th></th></tr></thead>
+      <tbody>
+        ${filtered.length ? filtered.map(p => `
+          <tr>
+            <td><span class="badge badge-yellow" style="font-family:var(--font-mono)">${p.dossard ?? '—'}</span></td>
+            <td><strong>${p.nom}</strong></td>
+            <td>${p.prenom}</td>
+            <td>${p.classe || '—'}</td>
+            <td>${p.etablissement || '—'}</td>
+            <td>${p.sexe === 'F' ? 'F' : p.sexe === 'M' ? 'M' : '—'}</td>
+            <td><span class="badge badge-${vmaColor(p.vma)}">${p.vma ?? '—'}</span></td>
+            <td style="display:flex;gap:6px">
+              <button class="btn btn-ghost btn-sm" onclick="openEditParticipant(${p.id})">Modifier</button>
+              <button class="btn btn-danger btn-sm" onclick="deleteParticipant(${p.id},'${p.nom} ${p.prenom}')">Suppr.</button>
+            </td>
+          </tr>`).join('')
+        : `<tr><td colspan="8" style="text-align:center;color:var(--text3);padding:32px">Aucun participant</td></tr>`}
+      </tbody>
+    </table>
   `;
 }
 
