@@ -261,6 +261,10 @@ async function saveParticipant() {
   const nom    = document.getElementById('p-nom').value.trim();
   const prenom = document.getElementById('p-prenom').value.trim();
   if (!nom || !prenom) { toast('Nom et prénom requis', 'error'); return; }
+
+  // Désactiver le bouton pour éviter les double-clics
+  const btnSave = document.querySelector('#modal-participant .btn-primary');
+  if (btnSave) { btnSave.disabled = true; btnSave.textContent = '⏳ Enregistrement...'; }
   const data = {
     nom, prenom,
     classe:        document.getElementById('p-classe').value.trim(),
@@ -279,6 +283,7 @@ async function saveParticipant() {
   }
   console.log('[saveParticipant] réponse :', res);
   if (res?.success) {
+    if (btnSave) { btnSave.disabled = false; btnSave.textContent = '💾 Enregistrer'; }
     closeModal('modal-participant');
     toast(state.editParticipantId ? 'Participant modifié' : 'Participant ajouté');
     await refreshData();
@@ -287,6 +292,8 @@ async function saveParticipant() {
     const errMsg = res?.error || 'Erreur inconnue (res=' + JSON.stringify(res) + ')';
     console.error('[saveParticipant] ERREUR :', errMsg);
     toast(errMsg, 'error');
+    // Réactiver le bouton pour permettre une correction
+    if (btnSave) { btnSave.disabled = false; btnSave.textContent = '💾 Enregistrer'; }
   }
 }
 

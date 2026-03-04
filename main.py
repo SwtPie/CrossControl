@@ -22,10 +22,16 @@ log = logging.getLogger("cross")
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cross_data.db")
 log.info(f"DB path : {DB_PATH}")
 
+# Connexion unique partagée — évite les "database is locked" sur Windows
+_db_conn = None
+
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+    global _db_conn
+    if _db_conn is None:
+        _db_conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=10)
+        _db_conn.row_factory = sqlite3.Row
+        log.info("Connexion SQLite initialisée")
+    return _db_conn
 
 def parse_arg(data):
     """pywebview peut passer un dict OU une string JSON selon la version — on normalise."""
@@ -87,7 +93,6 @@ def init_db():
         );
     """)
     conn.commit()
-    conn.close()
     log.info("init_db() — OK")
 
 
@@ -99,7 +104,6 @@ class API:
         try:
             conn = get_db()
             rows = conn.execute("SELECT * FROM participants ORDER BY nom, prenom").fetchall()
-            conn.close()
             result = [dict(r) for r in rows]
             log.debug(f"  → {len(result)} participants")
             return result
@@ -119,11 +123,12 @@ class API:
                  data.get('sexe',''), data.get('vma', None), data.get('dossard', None))
             )
             conn.commit()
-            conn.close()
             log.info(f"  → participant ajouté : {data['nom']} {data['prenom']}")
             return {"success": True}
         except sqlite3.IntegrityError as e:
             log.error(f"  IntegrityError: {e}")
+            if "participants.dossard" in str(e):
+                return {"success": False, "error": f"Le dossard {data.get('dossard')} est déjà attribué à un autre participant."}
             return {"success": False, "error": str(e)}
         except Exception as e:
             log.error(f"  ERREUR inattendue: {e}\n{traceback.format_exc()}")
@@ -140,7 +145,6 @@ class API:
                  data.get('sexe',''), data.get('vma', None), data.get('dossard', None), pid)
             )
             conn.commit()
-            conn.close()
             log.info(f"  → participant {pid} mis à jour")
             return {"success": True}
         except sqlite3.IntegrityError as e:
@@ -156,7 +160,6 @@ class API:
             conn = get_db()
             conn.execute("DELETE FROM participants WHERE id=?", (pid,))
             conn.commit()
-            conn.close()
             log.info(f"  → supprimé")
             return {"success": True}
         except Exception as e:
@@ -171,7 +174,6 @@ class API:
             for i, p in enumerate(participants):
                 conn.execute("UPDATE participants SET dossard=? WHERE id=?", (start + i, p['id']))
             conn.commit()
-            conn.close()
             log.info(f"  → {len(participants)} dossards attribués")
             return {"success": True, "count": len(participants)}
         except Exception as e:
@@ -185,7 +187,6 @@ class API:
         try:
             conn = get_db()
             rows = conn.execute("SELECT * FROM courses ORDER BY created_at DESC").fetchall()
-            conn.close()
             result = [dict(r) for r in rows]
             log.debug(f"  → {len(result)} courses")
             return result
@@ -204,7 +205,6 @@ class API:
             )
             course_id = c.lastrowid
             conn.commit()
-            conn.close()
             log.info(f"  → course créée id={course_id}")
             return {"success": True, "id": course_id}
         except Exception as e:
@@ -221,7 +221,6 @@ class API:
                 (data['nom'], data.get('distance', None), data.get('vma_min', None), data.get('vma_max', None), cid)
             )
             conn.commit()
-            conn.close()
             log.info(f"  → course {cid} mise à jour")
             return {"success": True}
         except Exception as e:
@@ -236,7 +235,6 @@ class API:
             conn.execute("DELETE FROM arrivees WHERE course_id=?", (cid,))
             conn.execute("DELETE FROM courses WHERE id=?", (cid,))
             conn.commit()
-            conn.close()
             log.info(f"  → course {cid} supprimée")
             return {"success": True}
         except Exception as e:
@@ -253,7 +251,6 @@ class API:
                 WHERE cp.course_id = ?
                 ORDER BY p.dossard, p.nom
             """, (course_id,)).fetchall()
-            conn.close()
             return [dict(r) for r in rows]
         except Exception as e:
             log.error(f"  ERREUR: {e}\n{traceback.format_exc()}")
@@ -271,7 +268,6 @@ class API:
                 conn.execute("INSERT INTO course_participants (course_id, participant_id) VALUES (?,?)",
                              (course_id, participant_id))
                 conn.commit()
-            conn.close()
             return {"success": True}
         except Exception as e:
             log.error(f"  ERREUR: {e}\n{traceback.format_exc()}")
@@ -284,7 +280,6 @@ class API:
             conn.execute("DELETE FROM course_participants WHERE course_id=? AND participant_id=?",
                          (course_id, participant_id))
             conn.commit()
-            conn.close()
             return {"success": True}
         except Exception as e:
             log.error(f"  ERREUR: {e}\n{traceback.format_exc()}")
@@ -296,13 +291,11 @@ class API:
             conn = get_db()
             course = conn.execute("SELECT * FROM courses WHERE id=?", (course_id,)).fetchone()
             if not course:
-                conn.close()
                 return {"success": False, "error": "Course introuvable"}
             vma_min = course['vma_min']
             vma_max = course['vma_max']
             log.debug(f"  vma_min={vma_min}, vma_max={vma_max}")
             if vma_min is None or vma_max is None:
-                conn.close()
                 return {"success": False, "error": "VMA min/max non définis sur cette course"}
             participants = conn.execute(
                 "SELECT id FROM participants WHERE vma >= ? AND vma <= ?", (vma_min, vma_max)
@@ -318,7 +311,6 @@ class API:
                                  (course_id, p['id']))
                     count += 1
             conn.commit()
-            conn.close()
             log.info(f"  → {count} participants ajoutés par VMA")
             return {"success": True, "count": count}
         except Exception as e:
@@ -334,7 +326,6 @@ class API:
             now = datetime.now().isoformat()
             conn.execute("UPDATE courses SET statut='en_cours', started_at=? WHERE id=?", (now, course_id))
             conn.commit()
-            conn.close()
             return {"success": True, "started_at": now}
         except Exception as e:
             log.error(f"  ERREUR: {e}\n{traceback.format_exc()}")
@@ -347,7 +338,6 @@ class API:
             now = datetime.now().isoformat()
             conn.execute("UPDATE courses SET statut='terminee', finished_at=? WHERE id=?", (now, course_id))
             conn.commit()
-            conn.close()
             return {"success": True}
         except Exception as e:
             log.error(f"  ERREUR: {e}\n{traceback.format_exc()}")
@@ -360,7 +350,6 @@ class API:
             conn.execute("DELETE FROM arrivees WHERE course_id=?", (course_id,))
             conn.execute("UPDATE courses SET statut='preparation', started_at=NULL, finished_at=NULL WHERE id=?", (course_id,))
             conn.commit()
-            conn.close()
             return {"success": True}
         except Exception as e:
             log.error(f"  ERREUR: {e}\n{traceback.format_exc()}")
@@ -381,7 +370,6 @@ class API:
             arrivee_id = conn.execute(
                 "SELECT id FROM arrivees WHERE course_id=? AND ordre_arrivee=?", (course_id, ordre)
             ).fetchone()['id']
-            conn.close()
             log.info(f"  → arrivée #{ordre} enregistrée (id={arrivee_id})")
             return {"success": True, "ordre": ordre, "arrivee_id": arrivee_id}
         except Exception as e:
@@ -396,7 +384,6 @@ class API:
                 "SELECT id FROM participants WHERE dossard=?", (dossard,)
             ).fetchone()
             if not participant:
-                conn.close()
                 log.warning(f"  → dossard {dossard} introuvable")
                 return {"success": False, "error": f"Dossard {dossard} introuvable"}
             conn.execute(
@@ -404,7 +391,6 @@ class API:
                 (dossard, participant['id'], arrivee_id)
             )
             conn.commit()
-            conn.close()
             log.info(f"  → dossard assigné à participant id={participant['id']}")
             return {"success": True}
         except Exception as e:
@@ -422,7 +408,6 @@ class API:
                 WHERE a.course_id = ?
                 ORDER BY a.ordre_arrivee
             """, (course_id,)).fetchall()
-            conn.close()
             return [dict(r) for r in rows]
         except Exception as e:
             log.error(f"  ERREUR: {e}\n{traceback.format_exc()}")
@@ -434,7 +419,6 @@ class API:
             conn = get_db()
             course = conn.execute("SELECT * FROM courses WHERE id=?", (course_id,)).fetchone()
             if not course:
-                conn.close()
                 return []
             rows = conn.execute("""
                 SELECT a.*, p.nom, p.prenom, p.classe, p.etablissement, p.sexe, p.vma, p.dossard as num_dossard
@@ -459,7 +443,6 @@ class API:
                     d['vitesse_kmh'] = None
                     d['pct_vma'] = None
                 classement.append(d)
-            conn.close()
             log.debug(f"  → {len(classement)} résultats")
             return classement
         except Exception as e:
@@ -473,7 +456,6 @@ class API:
             nb_participants = conn.execute("SELECT COUNT(*) as c FROM participants").fetchone()['c']
             nb_courses = conn.execute("SELECT COUNT(*) as c FROM courses").fetchone()['c']
             nb_arrivees = conn.execute("SELECT COUNT(*) as c FROM arrivees WHERE participant_id IS NOT NULL").fetchone()['c']
-            conn.close()
             return {"participants": nb_participants, "courses": nb_courses, "arrivees": nb_arrivees}
         except Exception as e:
             log.error(f"  ERREUR: {e}\n{traceback.format_exc()}")
