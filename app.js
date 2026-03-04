@@ -484,7 +484,7 @@ async function renderCourses() {
             <div class="info-item"><div class="lbl">Participants</div><div class="val">${courseParticipants.length}</div></div>
           </div>
           <div style="margin-bottom:16px">
-            <button class="btn btn-blue btn-sm" onclick="autoAddByVma(${course.id})">Auto-ajouter par VMA</button>
+            <button class="btn btn-blue btn-sm" onclick="openAjoutRapide(${course.id})">⚡ Ajout rapide</button>
           </div>
           <div class="tabs">
             <div class="tab ${courseTab==='liste'?'active':''}" onclick="courseTab='liste';renderCourses()">Inscrits (${courseParticipants.length})</div>
@@ -562,6 +562,102 @@ async function autoAddByVma(cid) {
     courseParticipants = (await call('get_course_participants', cid)) || [];
     renderCourses();
   } else { toast(res?.error || 'Erreur', 'error'); }
+}
+
+// ── AJOUT RAPIDE ──
+let ajoutRapideCourseId = null;
+
+function openAjoutRapide(cid) {
+  ajoutRapideCourseId = cid;
+
+  // Calculer les valeurs uniques pour les selects
+  const classes = [...new Set(state.participants.map(p => p.classe).filter(Boolean))].sort();
+  const etablissements = [...new Set(state.participants.map(p => p.etablissement).filter(Boolean))].sort();
+
+  // Pré-remplir les VMA min/max depuis la course si dispo
+  const course = state.courses.find(c => c.id === cid);
+
+  document.getElementById('ar-sexe').value = '';
+  document.getElementById('ar-vma-min').value = course?.vma_min ?? '';
+  document.getElementById('ar-vma-max').value = course?.vma_max ?? '';
+
+  // Remplir les selects classes et établissements
+  const selClasse = document.getElementById('ar-classe');
+  selClasse.innerHTML = `<option value="">Toutes</option>` + classes.map(c => `<option value="${c}">${c}</option>`).join('');
+
+  const selEtab = document.getElementById('ar-etablissement');
+  selEtab.innerHTML = `<option value="">Tous</option>` + etablissements.map(e => `<option value="${e}">${e}</option>`).join('');
+
+  previewAjoutRapide();
+  openModal('modal-ajout-rapide');
+}
+
+function previewAjoutRapide() {
+  const inscritIds = new Set(courseParticipants.map(p => p.id));
+  const filtered = filteredAjoutRapide(inscritIds);
+  const el = document.getElementById('ar-preview');
+  if (!el) return;
+
+  if (!filtered.length) {
+    el.innerHTML = `<div class="empty" style="padding:16px"><p>Aucun participant ne correspond aux filtres.</p></div>`;
+    document.getElementById('ar-count').textContent = '0 participant(s) à ajouter';
+    return;
+  }
+
+  document.getElementById('ar-count').textContent = `${filtered.length} participant(s) à ajouter`;
+  el.innerHTML = `<table>
+    <thead><tr><th>Dossard</th><th>Nom</th><th>Sexe</th><th>Classe</th><th>Établissement</th><th>VMA</th></tr></thead>
+    <tbody>${filtered.map(p => `
+      <tr>
+        <td><span class="badge badge-yellow">${p.dossard ?? '—'}</span></td>
+        <td>${p.nom} ${p.prenom}</td>
+        <td>${p.sexe || '—'}</td>
+        <td>${p.classe || '—'}</td>
+        <td style="font-size:12px;color:var(--text2)">${p.etablissement || '—'}</td>
+        <td><span class="badge badge-${vmaColor(p.vma)}">${p.vma ?? '—'}</span></td>
+      </tr>`).join('')}
+    </tbody>
+  </table>`;
+}
+
+function filteredAjoutRapide(inscritIds) {
+  const sexe  = document.getElementById('ar-sexe')?.value || '';
+  const vmaMin = parseFloat(document.getElementById('ar-vma-min')?.value) || null;
+  const vmaMax = parseFloat(document.getElementById('ar-vma-max')?.value) || null;
+  const classe = document.getElementById('ar-classe')?.value || '';
+  const etab   = document.getElementById('ar-etablissement')?.value || '';
+
+  return state.participants.filter(p => {
+    if (inscritIds.has(p.id)) return false;
+    if (sexe && p.sexe !== sexe) return false;
+    if (vmaMin !== null && (p.vma == null || p.vma < vmaMin)) return false;
+    if (vmaMax !== null && (p.vma == null || p.vma > vmaMax)) return false;
+    if (classe && p.classe !== classe) return false;
+    if (etab && p.etablissement !== etab) return false;
+    return true;
+  });
+}
+
+async function confirmerAjoutRapide() {
+  const inscritIds = new Set(courseParticipants.map(p => p.id));
+  const toAdd = filteredAjoutRapide(inscritIds);
+  if (!toAdd.length) { toast('Aucun participant à ajouter', 'error'); return; }
+
+  const btn = document.getElementById('ar-confirm-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Ajout en cours...'; }
+
+  let count = 0;
+  for (const p of toAdd) {
+    const res = await call('add_participant_to_course', ajoutRapideCourseId, p.id);
+    if (res?.success !== false) count++;
+  }
+
+  if (btn) { btn.disabled = false; btn.textContent = '✅ Ajouter les participants'; }
+
+  closeModal('modal-ajout-rapide');
+  toast(`${count} participant(s) ajouté(s)`);
+  courseParticipants = (await call('get_course_participants', ajoutRapideCourseId)) || [];
+  renderCourses();
 }
 
 function openAddCourse() {
