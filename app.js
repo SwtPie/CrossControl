@@ -317,6 +317,19 @@ function renderDashboard() {
 // ════════════════════════════════════════════════════════════════════════════════
 // PAGE : PARTICIPANTS
 // ════════════════════════════════════════════════════════════════════════════════
+// sort state : { col: 'nom'|'prenom'|'etablissement'|'vma'|null, dir: 1|-1 }
+let _pSort = { col: null, dir: 1 };
+
+function _sortParticipants(col) {
+  if (_pSort.col === col) {
+    _pSort.dir *= -1;
+  } else {
+    _pSort.col = col;
+    _pSort.dir = 1;
+  }
+  _renderParticipantsTable();
+}
+
 function renderParticipants() {
   document.getElementById('topbar-actions').innerHTML = `
     <button class="btn btn-ghost btn-sm" onclick="autoAssignDossards()">Auto-dossards</button>
@@ -341,16 +354,50 @@ function renderParticipants() {
 
 function _renderParticipantsTable() {
   const q = state.filterSearch.toLowerCase();
-  const filtered = state.participants.filter(p =>
+  let filtered = state.participants.filter(p =>
     !q || `${p.nom} ${p.prenom} ${p.classe} ${p.etablissement}`.toLowerCase().includes(q)
   );
+
+  // Tri
+  if (_pSort.col) {
+    filtered = [...filtered].sort((a, b) => {
+      let va = a[_pSort.col] ?? '';
+      let vb = b[_pSort.col] ?? '';
+      if (_pSort.col === 'vma') {
+        va = parseFloat(va) || 0;
+        vb = parseFloat(vb) || 0;
+        return (va - vb) * _pSort.dir;
+      }
+      return va.toString().localeCompare(vb.toString(), 'fr') * _pSort.dir;
+    });
+  }
+
   const count = document.getElementById('participants-count');
   if (count) count.textContent = `${filtered.length} / ${state.participants.length}`;
   const container = document.getElementById('participants-table-container');
   if (!container) return;
+
+  // Indicateur de tri dans les en-têtes
+  const arrow = (col) => {
+    if (_pSort.col !== col) return '<span style="opacity:.25;font-size:10px"> ⇅</span>';
+    return _pSort.dir === 1
+      ? '<span style="font-size:10px"> ↑</span>'
+      : '<span style="font-size:10px"> ↓</span>';
+  };
+  const thStyle = 'cursor:pointer;user-select:none;white-space:nowrap';
+
   container.innerHTML = `
     <table>
-      <thead><tr><th>Dossard</th><th>Nom</th><th>Prénom</th><th>Classe</th><th>Établissement</th><th>Sexe</th><th>VMA</th><th></th></tr></thead>
+      <thead><tr>
+        <th>Dossard</th>
+        <th style="${thStyle}" onclick="_sortParticipants('nom')">Nom${arrow('nom')}</th>
+        <th style="${thStyle}" onclick="_sortParticipants('prenom')">Prénom${arrow('prenom')}</th>
+        <th>Classe</th>
+        <th style="${thStyle}" onclick="_sortParticipants('etablissement')">Établissement${arrow('etablissement')}</th>
+        <th>Sexe</th>
+        <th style="${thStyle}" onclick="_sortParticipants('vma')">VMA${arrow('vma')}</th>
+        <th></th>
+      </tr></thead>
       <tbody>
         ${filtered.length ? filtered.map(p => `
           <tr>
