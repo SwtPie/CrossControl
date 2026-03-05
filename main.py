@@ -782,192 +782,224 @@ class API:
             return {"success": False, "error": str(e)}
 
 
-    # ─── EXPORT PDF ──────────────────────────────────────────────────────────────
+        # ─── EXPORT ──────────────────────────────────────────────────────────────────
 
-    def export_pdf_participants(self):
-        """Export PDF de tous les participants de l'événement."""
-        log.info("API.export_pdf_participants()")
+    def export_file(self, params_json):
+        """
+        Export unifié : context=(participants|course), format=(pdf|csv|xlsx),
+        filters={sexe, etablissement, classe}
+        """
+        import json as _json
+        log.info(f"API.export_file() params={params_json}")
         try:
-            from reportlab.lib.pagesizes import A4
-            from reportlab.lib import colors
-            from reportlab.lib.units import mm
-            from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-            from reportlab.lib.styles import ParagraphStyle
-            from reportlab.lib.enums import TA_LEFT, TA_CENTER
+            params  = _json.loads(params_json) if isinstance(params_json, str) else params_json
+            context = params.get("context", "participants")
+            fmt     = params.get("format", "pdf")
+            filters = params.get("filters", {})
+            course_id = params.get("course_id")
 
             conn  = get_event_db()
-            rows  = conn.execute("SELECT * FROM participants ORDER BY dossard, nom, prenom").fetchall()
             event = _event_info or {}
 
+            # ── Récupérer les lignes selon le contexte ──
+            if context == "course" and course_id:
+                course = conn.execute("SELECT * FROM courses WHERE id=?", (course_id,)).fetchone()
+                rows = conn.execute("""
+                    SELECT p.* FROM participants p
+                    JOIN course_participants cp ON cp.participant_id = p.id
+                    WHERE cp.course_id = ? ORDER BY p.dossard, p.nom
+                """, (course_id,)).fetchall()
+                title_line = dict(course)["nom"] if course else "Course"
+            else:
+                course = None
+                rows = conn.execute("SELECT * FROM participants ORDER BY dossard, nom, prenom").fetchall()
+                title_line = "Tous les participants"
+
+            rows = [dict(r) for r in rows]
+
+            # ── Appliquer les filtres (ET) ──
+            sexe  = filters.get("sexe", "")
+            etab  = filters.get("etablissement", "")
+            cls   = filters.get("classe", "")
+            if sexe:  rows = [r for r in rows if r.get("sexe") == sexe]
+            if etab:  rows = [r for r in rows if r.get("etablissement") == etab]
+            if cls:   rows = [r for r in rows if r.get("classe") == cls]
+
+            # ── Dossier exports ──
             exports_dir = os.path.join(BASE_DIR, "exports")
             os.makedirs(exports_dir, exist_ok=True)
-            filename = f"participants_{event.get('nom','export')}.pdf".replace(" ", "_")
-            path = os.path.join(exports_dir, filename)
 
-            doc = SimpleDocTemplate(path, pagesize=A4,
-                leftMargin=15*mm, rightMargin=15*mm,
-                topMargin=15*mm, bottomMargin=15*mm)
+            safe_title = title_line.replace(" ", "_")
+            filter_tag = "_".join(filter(None, [sexe, etab, cls])).replace(" ", "_")
+            if filter_tag: safe_title += f"_{filter_tag}"
 
-            story = []
+            # ════════════════════════════════
+            if fmt == "csv":
+                import csv, io
+                path = os.path.join(exports_dir, f"{safe_title}.csv")
+                with open(path, "w", newline="", encoding="utf-8-sig") as f:
+                    writer = csv.DictWriter(f, fieldnames=["dossard","nom","prenom","classe","etablissement","sexe","vma"],
+                                           extrasaction="ignore")
+                    writer.writeheader()
+                    for r in rows:
+                        writer.writerow({k: (r.get(k) or "") for k in ["dossard","nom","prenom","classe","etablissement","sexe","vma"]})
 
-            # Styles
-            title_style = ParagraphStyle("title", fontSize=18, fontName="Helvetica-Bold",
-                spaceAfter=2*mm, textColor=colors.HexColor("#d60a3c"))
-            sub_style   = ParagraphStyle("sub", fontSize=9, fontName="Helvetica",
-                spaceAfter=6*mm, textColor=colors.HexColor("#555d72"))
-            info_style  = ParagraphStyle("info", fontSize=9, fontName="Helvetica",
-                spaceAfter=4*mm, textColor=colors.HexColor("#333"))
+            # ════════════════════════════════
+            elif fmt == "xlsx":
+                import openpyxl
+                from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+                from openpyxl.utils import get_column_letter
 
-            story.append(Paragraph("CROSSCONTROL", title_style))
-            story.append(Paragraph(f"Liste des participants — {event.get('nom', '')}", sub_style))
-            if event.get("date"):
-                story.append(Paragraph(f"Date : {event['date']}  |  Lieu : {event.get('lieu', '—')}  |  {len(rows)} participant(s)", info_style))
-            story.append(Spacer(1, 4*mm))
+                wb = openpyxl.Workbook()
+                ws = wb.active
+                ws.title = title_line[:31]
 
-            # Tableau
-            headers = ["Dossard", "Nom", "Prénom", "Classe", "Établissement", "Sexe", "VMA"]
-            data = [headers]
-            for r in rows:
-                data.append([
-                    str(r["dossard"]) if r["dossard"] else "—",
-                    r["nom"] or "—",
-                    r["prenom"] or "—",
-                    r["classe"] or "—",
-                    r["etablissement"] or "—",
-                    r["sexe"] or "—",
-                    str(r["vma"]) if r["vma"] else "—",
-                ])
+                accent  = "FFD60A3C"
+                dark    = "FF161920"
+                light   = "FFF7F7F7"
+                border_color = "FFD0D5E2"
 
-            col_widths = [18*mm, 35*mm, 35*mm, 22*mm, 45*mm, 14*mm, 14*mm]
-            t = Table(data, colWidths=col_widths, repeatRows=1)
-            t.setStyle(TableStyle([
-                # En-tête
-                ("BACKGROUND",   (0,0), (-1,0),  colors.HexColor("#161920")),
-                ("TEXTCOLOR",    (0,0), (-1,0),  colors.HexColor("#d60a3c")),
-                ("FONTNAME",     (0,0), (-1,0),  "Helvetica-Bold"),
-                ("FONTSIZE",     (0,0), (-1,0),  8),
-                ("BOTTOMPADDING",(0,0), (-1,0),  4*mm),
-                ("TOPPADDING",   (0,0), (-1,0),  3*mm),
-                # Corps
-                ("FONTNAME",     (0,1), (-1,-1), "Helvetica"),
-                ("FONTSIZE",     (0,1), (-1,-1), 8),
-                ("TOPPADDING",   (0,1), (-1,-1), 2.5*mm),
-                ("BOTTOMPADDING",(0,1), (-1,-1), 2.5*mm),
-                ("ROWBACKGROUNDS",(0,1),(-1,-1), [colors.HexColor("#f7f7f7"), colors.white]),
-                ("TEXTCOLOR",    (0,1), (-1,-1), colors.HexColor("#1a1e2e")),
-                # Grille
-                ("GRID",         (0,0), (-1,-1), 0.3, colors.HexColor("#d0d5e2")),
-                ("LINEBELOW",    (0,0), (-1,0),  1,   colors.HexColor("#d60a3c")),
-                ("ALIGN",        (0,0), (0,-1),  "CENTER"),
-                ("ALIGN",        (5,0), (6,-1),  "CENTER"),
-            ]))
-            story.append(t)
+                thin = Border(
+                    left=Side(style="thin", color=border_color),
+                    right=Side(style="thin", color=border_color),
+                    top=Side(style="thin", color=border_color),
+                    bottom=Side(style="thin", color=border_color),
+                )
 
-            doc.build(story)
-            log.info(f"PDF généré : {path}")
+                # Titre événement
+                ws.merge_cells("A1:G1")
+                title_cell = ws["A1"]
+                title_cell.value = f"CROSSCONTROL — {event.get('nom','')} — {title_line}"
+                title_cell.font = Font(name="Arial", bold=True, size=12, color=accent)
+                title_cell.fill = PatternFill("solid", fgColor=dark)
+                title_cell.alignment = Alignment(horizontal="left", vertical="center")
+                ws.row_dimensions[1].height = 22
 
+                # Infos filtres
+                ws.merge_cells("A2:G2")
+                info_parts = []
+                if sexe:  info_parts.append(f"Sexe : {sexe}")
+                if etab:  info_parts.append(f"Établissement : {etab}")
+                if cls:   info_parts.append(f"Classe : {cls}")
+                info_parts.append(f"{len(rows)} participant(s)")
+                ws["A2"].value = "  |  ".join(info_parts)
+                ws["A2"].font  = Font(name="Arial", size=8, color="FF555D72")
+                ws["A2"].fill  = PatternFill("solid", fgColor=dark)
+                ws.row_dimensions[2].height = 14
+
+                # En-têtes
+                headers = ["Dossard", "Nom", "Prénom", "Classe", "Établissement", "Sexe", "VMA"]
+                col_w   = [10, 20, 20, 12, 25, 8, 8]
+                for ci, (h, w) in enumerate(zip(headers, col_w), 1):
+                    cell = ws.cell(row=3, column=ci, value=h)
+                    cell.font      = Font(name="Arial", bold=True, size=9, color=accent)
+                    cell.fill      = PatternFill("solid", fgColor=dark)
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
+                    cell.border    = thin
+                    ws.column_dimensions[get_column_letter(ci)].width = w
+                ws.row_dimensions[3].height = 18
+
+                # Données
+                for ri, r in enumerate(rows, 4):
+                    bg = light if ri % 2 == 0 else "FFFFFFFF"
+                    vals = [
+                        r.get("dossard") or "—",
+                        r.get("nom") or "—",
+                        r.get("prenom") or "—",
+                        r.get("classe") or "—",
+                        r.get("etablissement") or "—",
+                        r.get("sexe") or "—",
+                        r.get("vma") or "—",
+                    ]
+                    for ci, val in enumerate(vals, 1):
+                        cell = ws.cell(row=ri, column=ci, value=val)
+                        cell.font      = Font(name="Arial", size=9, color="FF1A1E2E")
+                        cell.fill      = PatternFill("solid", fgColor=bg)
+                        cell.alignment = Alignment(horizontal="center" if ci in (1,6,7) else "left", vertical="center")
+                        cell.border    = thin
+                    ws.row_dimensions[ri].height = 16
+
+                ws.freeze_panes = "A4"
+                path = os.path.join(exports_dir, f"{safe_title}.xlsx")
+                wb.save(path)
+
+            # ════════════════════════════════
+            else:  # pdf
+                from reportlab.lib.pagesizes import A4
+                from reportlab.lib import colors
+                from reportlab.lib.units import mm
+                from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+                from reportlab.lib.styles import ParagraphStyle
+
+                path = os.path.join(exports_dir, f"{safe_title}.pdf")
+                doc  = SimpleDocTemplate(path, pagesize=A4,
+                    leftMargin=15*mm, rightMargin=15*mm,
+                    topMargin=15*mm, bottomMargin=15*mm)
+
+                story = []
+                story.append(Paragraph("CROSSCONTROL", ParagraphStyle("t", fontSize=16,
+                    fontName="Helvetica-Bold", spaceAfter=1*mm, textColor=colors.HexColor("#d60a3c"))))
+                story.append(Paragraph(f"{title_line} — {event.get('nom','')}", ParagraphStyle("s",
+                    fontSize=9, fontName="Helvetica", spaceAfter=2*mm, textColor=colors.HexColor("#555d72"))))
+
+                meta = []
+                if sexe:  meta.append(f"Sexe : {sexe}")
+                if etab:  meta.append(f"Établissement : {etab}")
+                if cls:   meta.append(f"Classe : {cls}")
+                meta.append(f"{len(rows)} participant(s)")
+                story.append(Paragraph("  |  ".join(meta), ParagraphStyle("i",
+                    fontSize=8, fontName="Helvetica", spaceAfter=5*mm, textColor=colors.HexColor("#333"))))
+
+                if context == "course" and course:
+                    c = dict(course)
+                    course_meta = []
+                    if c.get("distance"): course_meta.append(f"Distance : {c['distance']}m")
+                    if c.get("vma_min") and c.get("vma_max"): course_meta.append(f"VMA : {c['vma_min']}–{c['vma_max']} km/h")
+                    if course_meta:
+                        story.append(Paragraph("  |  ".join(course_meta), ParagraphStyle("cm",
+                            fontSize=8, fontName="Helvetica", spaceAfter=5*mm, textColor=colors.HexColor("#333"))))
+
+                headers = ["Dossard", "Nom", "Prénom", "Classe", "Établissement", "Sexe", "VMA"]
+                data = [headers] + [[
+                    str(r.get("dossard") or "—"), r.get("nom") or "—", r.get("prenom") or "—",
+                    r.get("classe") or "—", r.get("etablissement") or "—",
+                    r.get("sexe") or "—", str(r.get("vma") or "—")
+                ] for r in rows]
+
+                col_widths = [18*mm, 35*mm, 35*mm, 20*mm, 43*mm, 12*mm, 12*mm]
+                t = Table(data, colWidths=col_widths, repeatRows=1)
+                t.setStyle(TableStyle([
+                    ("BACKGROUND",    (0,0), (-1,0),  colors.HexColor("#161920")),
+                    ("TEXTCOLOR",     (0,0), (-1,0),  colors.HexColor("#d60a3c")),
+                    ("FONTNAME",      (0,0), (-1,0),  "Helvetica-Bold"),
+                    ("FONTSIZE",      (0,0), (-1,0),  8),
+                    ("TOPPADDING",    (0,0), (-1,0),  3*mm),
+                    ("BOTTOMPADDING", (0,0), (-1,0),  3*mm),
+                    ("FONTNAME",      (0,1), (-1,-1), "Helvetica"),
+                    ("FONTSIZE",      (0,1), (-1,-1), 8),
+                    ("TOPPADDING",    (0,1), (-1,-1), 2.5*mm),
+                    ("BOTTOMPADDING", (0,1), (-1,-1), 2.5*mm),
+                    ("ROWBACKGROUNDS",(0,1), (-1,-1),  [colors.HexColor("#f7f7f7"), colors.white]),
+                    ("TEXTCOLOR",     (0,1), (-1,-1), colors.HexColor("#1a1e2e")),
+                    ("GRID",          (0,0), (-1,-1), 0.3, colors.HexColor("#d0d5e2")),
+                    ("LINEBELOW",     (0,0), (-1,0),  1, colors.HexColor("#d60a3c")),
+                    ("ALIGN",         (0,0), (0,-1),  "CENTER"),
+                    ("ALIGN",         (5,0), (6,-1),  "CENTER"),
+                ]))
+                story.append(t)
+                doc.build(story)
+
+            # ── Ouvrir le fichier ──
             import subprocess
-            subprocess.Popen(["explorer", path] if os.name == "nt" else ["xdg-open", path])
+            if os.name == "nt":
+                os.startfile(path)
+            else:
+                subprocess.Popen(["xdg-open", path])
+
             return {"success": True, "path": path}
 
         except Exception as e:
-            log.error(f"export_pdf_participants ERREUR: {e}\n{traceback.format_exc()}")
-            return {"success": False, "error": str(e)}
-
-    def export_pdf_course(self, course_id):
-        """Export PDF des participants d'une course spécifique."""
-        log.info(f"API.export_pdf_course(course_id={course_id})")
-        try:
-            from reportlab.lib.pagesizes import A4
-            from reportlab.lib import colors
-            from reportlab.lib.units import mm
-            from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-            from reportlab.lib.styles import ParagraphStyle
-
-            conn   = get_event_db()
-            course = conn.execute("SELECT * FROM courses WHERE id=?", (course_id,)).fetchone()
-            if not course:
-                return {"success": False, "error": "Course introuvable"}
-
-            rows = conn.execute("""
-                SELECT p.* FROM participants p
-                JOIN course_participants cp ON cp.participant_id = p.id
-                WHERE cp.course_id = ? ORDER BY p.dossard, p.nom
-            """, (course_id,)).fetchall()
-
-            event = _event_info or {}
-
-            exports_dir = os.path.join(BASE_DIR, "exports")
-            os.makedirs(exports_dir, exist_ok=True)
-            filename = f"course_{course['nom']}.pdf".replace(" ", "_")
-            path = os.path.join(exports_dir, filename)
-
-            doc = SimpleDocTemplate(path, pagesize=A4,
-                leftMargin=15*mm, rightMargin=15*mm,
-                topMargin=15*mm, bottomMargin=15*mm)
-
-            story = []
-
-            title_style = ParagraphStyle("title", fontSize=18, fontName="Helvetica-Bold",
-                spaceAfter=2*mm, textColor=colors.HexColor("#d60a3c"))
-            sub_style   = ParagraphStyle("sub", fontSize=9, fontName="Helvetica",
-                spaceAfter=3*mm, textColor=colors.HexColor("#555d72"))
-            info_style  = ParagraphStyle("info", fontSize=9, fontName="Helvetica",
-                spaceAfter=6*mm, textColor=colors.HexColor("#333"))
-
-            story.append(Paragraph("CROSSCONTROL", title_style))
-            story.append(Paragraph(f"{course['nom']} — {event.get('nom', '')}", sub_style))
-
-            meta = []
-            if course["distance"]: meta.append(f"Distance : {course['distance']}m")
-            if course["vma_min"] and course["vma_max"]: meta.append(f"VMA : {course['vma_min']}–{course['vma_max']} km/h")
-            meta.append(f"{len(rows)} participant(s)")
-            story.append(Paragraph("  |  ".join(meta), info_style))
-
-            headers = ["Dossard", "Nom", "Prénom", "Classe", "Établissement", "Sexe", "VMA"]
-            data = [headers]
-            for r in rows:
-                data.append([
-                    str(r["dossard"]) if r["dossard"] else "—",
-                    r["nom"] or "—",
-                    r["prenom"] or "—",
-                    r["classe"] or "—",
-                    r["etablissement"] or "—",
-                    r["sexe"] or "—",
-                    str(r["vma"]) if r["vma"] else "—",
-                ])
-
-            col_widths = [18*mm, 35*mm, 35*mm, 22*mm, 45*mm, 14*mm, 14*mm]
-            t = Table(data, colWidths=col_widths, repeatRows=1)
-            t.setStyle(TableStyle([
-                ("BACKGROUND",   (0,0), (-1,0),  colors.HexColor("#161920")),
-                ("TEXTCOLOR",    (0,0), (-1,0),  colors.HexColor("#d60a3c")),
-                ("FONTNAME",     (0,0), (-1,0),  "Helvetica-Bold"),
-                ("FONTSIZE",     (0,0), (-1,0),  8),
-                ("BOTTOMPADDING",(0,0), (-1,0),  4*mm),
-                ("TOPPADDING",   (0,0), (-1,0),  3*mm),
-                ("FONTNAME",     (0,1), (-1,-1), "Helvetica"),
-                ("FONTSIZE",     (0,1), (-1,-1), 8),
-                ("TOPPADDING",   (0,1), (-1,-1), 2.5*mm),
-                ("BOTTOMPADDING",(0,1), (-1,-1), 2.5*mm),
-                ("ROWBACKGROUNDS",(0,1),(-1,-1), [colors.HexColor("#f7f7f7"), colors.white]),
-                ("TEXTCOLOR",    (0,1), (-1,-1), colors.HexColor("#1a1e2e")),
-                ("GRID",         (0,0), (-1,-1), 0.3, colors.HexColor("#d0d5e2")),
-                ("LINEBELOW",    (0,0), (-1,0),  1,   colors.HexColor("#d60a3c")),
-                ("ALIGN",        (0,0), (0,-1),  "CENTER"),
-                ("ALIGN",        (5,0), (6,-1),  "CENTER"),
-            ]))
-            story.append(t)
-
-            doc.build(story)
-            log.info(f"PDF généré : {path}")
-
-            import subprocess
-            subprocess.Popen(["explorer", path] if os.name == "nt" else ["xdg-open", path])
-            return {"success": True, "path": path}
-
-        except Exception as e:
-            log.error(f"export_pdf_course ERREUR: {e}\n{traceback.format_exc()}")
+            log.error(f"export_file ERREUR: {e}\n{traceback.format_exc()}")
             return {"success": False, "error": str(e)}
 
     def get_stats(self):

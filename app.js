@@ -321,7 +321,7 @@ function renderParticipants() {
   document.getElementById('topbar-actions').innerHTML = `
     <button class="btn btn-ghost btn-sm" onclick="autoAssignDossards()">Auto-dossards</button>
     <button class="btn btn-ghost btn-sm" onclick="openImportModal()">📥 Importer</button>
-    <button class="btn btn-ghost btn-sm" onclick="exportPdfParticipants()">📄 PDF</button>
+    <button class="btn btn-ghost btn-sm" onclick="openExportParticipants()">📤 Export</button>
     <button class="btn btn-primary" onclick="openAddParticipant()">+ Ajouter</button>
   `;
   // Ne recréer la structure que si elle n'existe pas encore (évite de perdre le focus sur l'input)
@@ -504,7 +504,7 @@ async function renderCourses() {
           </div>
           <div style="margin-bottom:16px">
             <button class="btn btn-blue btn-sm" onclick="openAjoutRapide(${course.id})">⚡ Ajout rapide</button>
-            <button class="btn btn-ghost btn-sm" onclick="exportPdfCourse(${course.id})">📄 PDF</button>
+            <button class="btn btn-ghost btn-sm" onclick="openExportCourse(${course.id})">📤 Export</button>
           </div>
           <div class="tabs">
             <div class="tab ${courseTab==='liste'?'active':''}" onclick="courseTab='liste';renderCourses()">Inscrits (${courseParticipants.length})</div>
@@ -1378,25 +1378,96 @@ function drawVmaChart(participants) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════════
-// EXPORT PDF
+// EXPORT (participants + course)
 // ════════════════════════════════════════════════════════════════════════════════
-async function exportPdfParticipants() {
-  toast('Génération du PDF…');
-  const res = await call('export_pdf_participants');
-  if (res?.success) {
-    toast('PDF généré et ouvert');
-  } else {
-    toast(res?.error || 'Erreur lors de la génération', 'error');
-  }
+let _exportCourseId = null;
+
+// ── Participants ──────────────────────────────────────────────────────────────
+async function openExportParticipants() {
+  // Peupler les selects depuis les données en mémoire
+  const parts = state.participants || [];
+  _populateExportSelects('exp-p-etab', 'exp-p-classe', parts);
+  _updateExportCount('exp-p', parts, null);
+  // Écouter les changements de filtres
+  ['exp-p-sexe','exp-p-etab','exp-p-classe'].forEach(id => {
+    document.getElementById(id).onchange = () => _updateExportCount('exp-p', parts, null);
+  });
+  openModal('modal-export-participants');
 }
 
-async function exportPdfCourse(courseId) {
-  toast('Génération du PDF…');
-  const res = await call('export_pdf_course', courseId);
+async function doExportParticipants() {
+  const filters = _getExportFilters('exp-p');
+  const format  = document.querySelector('input[name="exp-p-format"]:checked')?.value || 'pdf';
+  toast('Export en cours…');
+  const res = await call('export_file', JSON.stringify({ context: 'participants', format, filters }));
+  _handleExportResult(res, format);
+  if (res?.success) closeModal('modal-export-participants');
+}
+
+// ── Course ────────────────────────────────────────────────────────────────────
+async function openExportCourse(courseId) {
+  _exportCourseId = courseId;
+  const course = (state.courses || []).find(c => c.id === courseId);
+  document.getElementById('exp-c-course-name').textContent = course ? course.nom : '';
+  // Participants de cette course uniquement
+  const res = await call('get_course_participants', courseId);
+  const parts = Array.isArray(res) ? res : [];
+  _populateExportSelects('exp-c-etab', 'exp-c-classe', parts);
+  _updateExportCount('exp-c', parts, courseId);
+  ['exp-c-sexe','exp-c-etab','exp-c-classe'].forEach(id => {
+    document.getElementById(id).onchange = () => _updateExportCount('exp-c', parts, courseId);
+  });
+  openModal('modal-export-course');
+}
+
+async function doExportCourse() {
+  const filters = _getExportFilters('exp-c');
+  const format  = document.querySelector('input[name="exp-c-format"]:checked')?.value || 'pdf';
+  toast('Export en cours…');
+  const res = await call('export_file', JSON.stringify({ context: 'course', course_id: _exportCourseId, format, filters }));
+  _handleExportResult(res, format);
+  if (res?.success) closeModal('modal-export-course');
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function _populateExportSelects(etabId, classeId, parts) {
+  const etabs   = [...new Set(parts.map(p => p.etablissement).filter(Boolean))].sort();
+  const classes = [...new Set(parts.map(p => p.classe).filter(Boolean))].sort();
+  const etabEl   = document.getElementById(etabId);
+  const classeEl = document.getElementById(classeId);
+  etabEl.innerHTML   = '<option value="">Tous</option>' + etabs.map(e => `<option value="${e}">${e}</option>`).join('');
+  classeEl.innerHTML = '<option value="">Toutes</option>' + classes.map(c => `<option value="${c}">${c}</option>`).join('');
+}
+
+function _getExportFilters(prefix) {
+  return {
+    sexe:          document.getElementById(`${prefix}-sexe`)?.value || '',
+    etablissement: document.getElementById(`${prefix}-etab`)?.value || '',
+    classe:        document.getElementById(`${prefix}-classe`)?.value || '',
+  };
+}
+
+function _applyFilters(parts, filters) {
+  return parts.filter(p => {
+    if (filters.sexe          && p.sexe          !== filters.sexe)          return false;
+    if (filters.etablissement && p.etablissement !== filters.etablissement) return false;
+    if (filters.classe        && p.classe        !== filters.classe)        return false;
+    return true;
+  });
+}
+
+function _updateExportCount(prefix, parts, courseId) {
+  const filters   = _getExportFilters(prefix);
+  const filtered  = _applyFilters(parts, filters);
+  const el = document.getElementById(`${prefix}-count`);
+  if (el) el.textContent = `${filtered.length} participant(s) dans cet export`;
+}
+
+function _handleExportResult(res, format) {
   if (res?.success) {
-    toast('PDF généré et ouvert');
+    toast(`Export ${format.toUpperCase()} généré et ouvert`);
   } else {
-    toast(res?.error || 'Erreur lors de la génération', 'error');
+    toast(res?.error || "Erreur export", 'error');
   }
 }
 

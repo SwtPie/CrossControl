@@ -239,6 +239,104 @@
   </div>
 </div>
 
+<!-- ── MODAL : EXPORT PARTICIPANTS ── -->
+<div id="modal-export-participants" class="modal-overlay hidden">
+  <div class="modal" style="min-width:480px;max-width:580px">
+    <div class="modal-title">📤 Exporter les participants</div>
+
+    <!-- Filtres -->
+    <div class="form-group">
+      <label>Sexe</label>
+      <select id="exp-p-sexe">
+        <option value="">Tous</option>
+        <option value="F">Filles (F)</option>
+        <option value="M">Garçons (M)</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Établissement</label>
+      <select id="exp-p-etab"><option value="">Tous</option></select>
+    </div>
+    <div class="form-group">
+      <label>Classe</label>
+      <select id="exp-p-classe"><option value="">Toutes</option></select>
+    </div>
+
+    <div id="exp-p-count" style="font-size:12px;color:var(--text3);font-family:var(--font-mono);margin-bottom:16px;min-height:16px"></div>
+
+    <!-- Format -->
+    <div class="form-group">
+      <label>Format d'export</label>
+      <div style="display:flex;gap:10px;margin-top:6px">
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;text-transform:none;letter-spacing:0;color:var(--text)">
+          <input type="radio" name="exp-p-format" value="pdf" checked style="accent-color:var(--accent)"> PDF
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;text-transform:none;letter-spacing:0;color:var(--text)">
+          <input type="radio" name="exp-p-format" value="csv" style="accent-color:var(--accent)"> CSV
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;text-transform:none;letter-spacing:0;color:var(--text)">
+          <input type="radio" name="exp-p-format" value="xlsx" style="accent-color:var(--accent)"> Excel (.xlsx)
+        </label>
+      </div>
+    </div>
+
+    <div class="form-actions">
+      <button class="btn btn-primary" onclick="doExportParticipants()">📤 Exporter</button>
+      <button class="btn btn-ghost" onclick="closeModal('modal-export-participants')">Annuler</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── MODAL : EXPORT COURSE ── -->
+<div id="modal-export-course" class="modal-overlay hidden">
+  <div class="modal" style="min-width:480px;max-width:580px">
+    <div class="modal-title">📤 Exporter la liste de la course</div>
+
+    <div id="exp-c-course-name" style="font-size:13px;color:var(--text2);margin-bottom:16px;font-family:var(--font-mono)"></div>
+
+    <!-- Filtres -->
+    <div class="form-group">
+      <label>Sexe</label>
+      <select id="exp-c-sexe">
+        <option value="">Tous</option>
+        <option value="F">Filles (F)</option>
+        <option value="M">Garçons (M)</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Établissement</label>
+      <select id="exp-c-etab"><option value="">Tous</option></select>
+    </div>
+    <div class="form-group">
+      <label>Classe</label>
+      <select id="exp-c-classe"><option value="">Toutes</option></select>
+    </div>
+
+    <div id="exp-c-count" style="font-size:12px;color:var(--text3);font-family:var(--font-mono);margin-bottom:16px;min-height:16px"></div>
+
+    <!-- Format -->
+    <div class="form-group">
+      <label>Format d'export</label>
+      <div style="display:flex;gap:10px;margin-top:6px">
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;text-transform:none;letter-spacing:0;color:var(--text)">
+          <input type="radio" name="exp-c-format" value="pdf" checked style="accent-color:var(--accent)"> PDF
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;text-transform:none;letter-spacing:0;color:var(--text)">
+          <input type="radio" name="exp-c-format" value="csv" style="accent-color:var(--accent)"> CSV
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;text-transform:none;letter-spacing:0;color:var(--text)">
+          <input type="radio" name="exp-c-format" value="xlsx" style="accent-color:var(--accent)"> Excel (.xlsx)
+        </label>
+      </div>
+    </div>
+
+    <div class="form-actions">
+      <button class="btn btn-primary" onclick="doExportCourse()">📤 Exporter</button>
+      <button class="btn btn-ghost" onclick="closeModal('modal-export-course')">Annuler</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── MODAL : AJOUT RAPIDE ── -->
 <div id="modal-ajout-rapide" class="modal-overlay hidden">
   <div class="modal" style="min-width:600px;max-width:820px">
