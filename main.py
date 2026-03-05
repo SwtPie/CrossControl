@@ -324,11 +324,36 @@ class API:
     def auto_assign_dossards(self, start=1):
         try:
             conn = get_event_db()
-            participants = conn.execute("SELECT id FROM participants ORDER BY id").fetchall()
-            for i, p in enumerate(participants):
-                conn.execute("UPDATE participants SET dossard=? WHERE id=?", (start + i, p['id']))
+            # Grouper par établissement (ordre alphabétique), tri nom/prénom dans chaque groupe
+            # Participants sans établissement regroupés en dernier
+            rows = conn.execute("""
+                SELECT id, etablissement FROM participants
+                ORDER BY
+                    CASE WHEN etablissement IS NULL OR etablissement = '' THEN 1 ELSE 0 END,
+                    etablissement COLLATE NOCASE,
+                    nom COLLATE NOCASE,
+                    prenom COLLATE NOCASE
+            """).fetchall()
+
+            GAP = 5  # numéros de marge entre chaque établissement
+            current      = int(start)
+            current_etab = None
+            count        = 0
+
+            for p in rows:
+                etab = p["etablissement"] or ""
+                if current_etab is None:
+                    current_etab = etab
+                elif etab != current_etab:
+                    # Prochain multiple de GAP + GAP (ex: après 23 → 30)
+                    current = (((current - 1) // GAP) + 2) * GAP + 1
+                    current_etab = etab
+                conn.execute("UPDATE participants SET dossard=? WHERE id=?", (current, p["id"]))
+                current += 1
+                count   += 1
+
             conn.commit()
-            return {"success": True, "count": len(participants)}
+            return {"success": True, "count": count}
         except Exception as e:
             log.error(f"  ERREUR: {e}"); return {"success": False, "error": str(e)}
 
