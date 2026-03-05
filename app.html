@@ -239,6 +239,52 @@
   </div>
 </div>
 
+<!-- ── MODAL : OPTIONS AVANCÉES PARTICIPANTS ── -->
+<div id="modal-options-avancees" class="modal-overlay hidden">
+  <div class="modal" style="min-width:460px;max-width:540px">
+    <div class="modal-title">⚙️ Options avancées</div>
+
+    <div style="display:flex;flex-direction:column;gap:10px">
+
+      <!-- Supprimer tous les participants -->
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;background:var(--surface2);border-radius:var(--radius);border:1px solid var(--border)">
+        <div>
+          <div style="font-size:13px;font-weight:600;color:var(--text)">Supprimer tous les participants</div>
+          <div style="font-size:11px;color:var(--text3);margin-top:2px">Supprime l'intégralité de la liste et retire tous les inscrits des courses.</div>
+        </div>
+        <button class="btn btn-danger btn-sm" style="flex-shrink:0;margin-left:16px" onclick="optionSupprimerTous()">Supprimer</button>
+      </div>
+
+      <!-- Supprimer l'attribution des dossards -->
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;background:var(--surface2);border-radius:var(--radius);border:1px solid var(--border)">
+        <div>
+          <div style="font-size:13px;font-weight:600;color:var(--text)">Réinitialiser les dossards</div>
+          <div style="font-size:11px;color:var(--text3);margin-top:2px">Retire le numéro de dossard de tous les participants sans les supprimer.</div>
+        </div>
+        <button class="btn btn-ghost btn-sm" style="flex-shrink:0;margin-left:16px" onclick="optionResetDossards()">Réinitialiser</button>
+      </div>
+
+      <!-- Supprimer un établissement -->
+      <div style="padding:14px 16px;background:var(--surface2);border-radius:var(--radius);border:1px solid var(--border)">
+        <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:6px">Supprimer un établissement</div>
+        <div style="font-size:11px;color:var(--text3);margin-bottom:10px">Supprime tous les participants de l'établissement sélectionné.</div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <select id="opt-etab-select" style="flex:1">
+            <option value="">— Choisir un établissement —</option>
+          </select>
+          <button class="btn btn-danger btn-sm" style="flex-shrink:0" onclick="optionSupprimerEtab()">Supprimer</button>
+        </div>
+        <div id="opt-etab-count" style="font-size:11px;color:var(--text3);margin-top:6px;font-family:var(--font-mono);min-height:14px"></div>
+      </div>
+
+    </div>
+
+    <div class="form-actions" style="margin-top:16px">
+      <button class="btn btn-ghost" onclick="closeModal('modal-options-avancees')">Fermer</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── MODAL : EXPORT PARTICIPANTS ── -->
 <div id="modal-export-participants" class="modal-overlay hidden">
   <div class="modal" style="min-width:480px;max-width:580px">

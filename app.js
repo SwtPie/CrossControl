@@ -335,6 +335,7 @@ function renderParticipants() {
     <button class="btn btn-ghost btn-sm" onclick="autoAssignDossards()">Auto-dossards</button>
     <button class="btn btn-ghost btn-sm" onclick="openImportModal()">📥 Importer</button>
     <button class="btn btn-ghost btn-sm" onclick="openExportParticipants()">📤 Export</button>
+    <button class="btn btn-ghost btn-sm" onclick="openOptionsAvancees()">⚙️ Options</button>
     <button class="btn btn-primary" onclick="openAddParticipant()">+ Ajouter</button>
   `;
   // Ne recréer la structure que si elle n'existe pas encore (évite de perdre le focus sur l'input)
@@ -1422,6 +1423,70 @@ function drawVmaChart(participants) {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
   ctx.fillText('VMA arrondie (km/h)', W / 2, H - 14);
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
+// OPTIONS AVANCÉES
+// ════════════════════════════════════════════════════════════════════════════════
+function openOptionsAvancees() {
+  // Peupler la liste des établissements
+  const etabs = [...new Set((state.participants || [])
+    .map(p => p.etablissement).filter(Boolean))].sort();
+  const sel = document.getElementById('opt-etab-select');
+  sel.innerHTML = '<option value="">— Choisir un établissement —</option>'
+    + etabs.map(e => `<option value="${e}">${e}</option>`).join('');
+  document.getElementById('opt-etab-count').textContent = '';
+  sel.onchange = () => {
+    const etab = sel.value;
+    if (!etab) { document.getElementById('opt-etab-count').textContent = ''; return; }
+    const n = (state.participants || []).filter(p => p.etablissement === etab).length;
+    document.getElementById('opt-etab-count').textContent = `${n} participant(s) concerné(s)`;
+  };
+  openModal('modal-options-avancees');
+}
+
+async function optionSupprimerTous() {
+  const n = (state.participants || []).length;
+  if (!n) { toast('Aucun participant à supprimer', 'error'); return; }
+  if (!confirm(`Supprimer les ${n} participants ? Cette action est irréversible.`)) return;
+  const res = await call('supprimer_tous_participants');
+  if (res?.success) {
+    toast(`${res.count} participant(s) supprimé(s)`);
+    await refreshData();
+    renderParticipants();
+  } else {
+    toast(res?.error || 'Erreur', 'error');
+  }
+}
+
+async function optionResetDossards() {
+  const n = (state.participants || []).filter(p => p.dossard != null).length;
+  if (!n) { toast('Aucun dossard attribué', 'error'); return; }
+  if (!confirm(`Réinitialiser les dossards de ${n} participant(s) ?`)) return;
+  const res = await call('reset_dossards');
+  if (res?.success) {
+    toast(`Dossards réinitialisés (${res.count} participants)`);
+    await refreshData();
+    renderParticipants();
+  } else {
+    toast(res?.error || 'Erreur', 'error');
+  }
+}
+
+async function optionSupprimerEtab() {
+  const etab = document.getElementById('opt-etab-select').value;
+  if (!etab) { toast('Sélectionnez un établissement', 'error'); return; }
+  const n = (state.participants || []).filter(p => p.etablissement === etab).length;
+  if (!confirm(`Supprimer les ${n} participants de "${etab}" ? Cette action est irréversible.`)) return;
+  const res = await call('supprimer_participants_etab', etab);
+  if (res?.success) {
+    toast(`${res.count} participant(s) de "${etab}" supprimé(s)`);
+    await refreshData();
+    openOptionsAvancees(); // rafraîchir le select
+    renderParticipants();
+  } else {
+    toast(res?.error || 'Erreur', 'error');
+  }
 }
 
 // ════════════════════════════════════════════════════════════════════════════════

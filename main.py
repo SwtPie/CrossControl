@@ -1027,6 +1027,42 @@ class API:
             log.error(f"export_file ERREUR: {e}\n{traceback.format_exc()}")
             return {"success": False, "error": str(e)}
 
+    def supprimer_tous_participants(self):
+        try:
+            conn = get_event_db()
+            count = conn.execute("SELECT COUNT(*) as c FROM participants").fetchone()['c']
+            conn.execute("DELETE FROM course_participants")
+            conn.execute("DELETE FROM participants")
+            conn.commit()
+            return {"success": True, "count": count}
+        except Exception as e:
+            log.error(f"  ERREUR: {e}"); return {"success": False, "error": str(e)}
+
+    def reset_dossards(self):
+        try:
+            conn = get_event_db()
+            count = conn.execute("SELECT COUNT(*) as c FROM participants WHERE dossard IS NOT NULL").fetchone()['c']
+            conn.execute("UPDATE participants SET dossard=NULL")
+            conn.commit()
+            return {"success": True, "count": count}
+        except Exception as e:
+            log.error(f"  ERREUR: {e}"); return {"success": False, "error": str(e)}
+
+    def supprimer_participants_etab(self, etablissement):
+        try:
+            conn = get_event_db()
+            ids = [r['id'] for r in conn.execute(
+                "SELECT id FROM participants WHERE etablissement=?", (etablissement,)).fetchall()]
+            if not ids:
+                return {"success": False, "error": "Aucun participant trouvé pour cet établissement"}
+            placeholders = ','.join('?' * len(ids))
+            conn.execute(f"DELETE FROM course_participants WHERE participant_id IN ({placeholders})", ids)
+            conn.execute(f"DELETE FROM participants WHERE id IN ({placeholders})", ids)
+            conn.commit()
+            return {"success": True, "count": len(ids)}
+        except Exception as e:
+            log.error(f"  ERREUR: {e}"); return {"success": False, "error": str(e)}
+
     def get_stats(self):
         try:
             conn = get_event_db()
