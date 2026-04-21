@@ -9,7 +9,13 @@ import logging
 from datetime import datetime
 
 # ── LOGGING ──────────────────────────────────────────────────────────────────
-BASE_DIR  = os.path.dirname(os.path.abspath(__file__))
+# dossier de l'exe
+if getattr(sys, 'frozen', False):
+    BASE_DIR = os.path.dirname(sys.executable)
+    RESOURCE_DIR = sys._MEIPASS
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    RESOURCE_DIR = BASE_DIR
 LOG_PATH  = os.path.join(BASE_DIR, "cross_debug.log")
 RACES_DIR = os.path.join(BASE_DIR, "races")
 EVENTS_DB = os.path.join(BASE_DIR, "events.db")
@@ -75,6 +81,35 @@ def slugify(text):
             text = text.replace(c, dst)
     text = re.sub(r"[^a-z0-9]+", "_", text).strip("_")
     return text or "evenement"
+
+def resolve_db_path(stored_path, eid=None):
+    """
+    Résout le chemin vers la DB d'un événement.
+    Si le chemin absolu stocké n'existe plus (projet déplacé),
+    on cherche le fichier par son nom dans RACES_DIR et on corrige
+    automatiquement la valeur en base.
+    Retourne le chemin résolu, ou lève une exception si introuvable.
+    """
+    # 1. Le chemin stocké existe → on l'utilise directement
+    if os.path.exists(stored_path):
+        return stored_path
+
+    # 2. Chercher par nom de fichier dans RACES_DIR (projet déplacé)
+    filename = os.path.basename(stored_path)
+    fallback = os.path.join(RACES_DIR, filename)
+    if os.path.exists(fallback):
+        log.warning(f"Chemin obsolète '{stored_path}' → corrigé en '{fallback}'")
+        if eid is not None:
+            conn = get_events_db()
+            conn.execute("UPDATE evenements SET db_path=? WHERE id=?", (fallback, eid))
+            conn.commit()
+        return fallback
+
+    raise FileNotFoundError(
+        f"Fichier DB introuvable : '{filename}' "
+        f"(cherché dans '{RACES_DIR}'). "
+        f"Vérifiez que le dossier 'races/' est bien présent à côté de main.py."
+    )
 
 # ── INIT EVENTS DB ────────────────────────────────────────────────────────────
 def init_events_db():
@@ -162,7 +197,8 @@ class API:
             for r in rows:
                 e = dict(r)
                 try:
-                    ec = sqlite3.connect(e['db_path'])
+                    resolved = resolve_db_path(e['db_path'], e['id'])
+                    ec = sqlite3.connect(resolved)
                     ec.row_factory = sqlite3.Row
                     e['nb_participants'] = ec.execute("SELECT COUNT(*) as c FROM participants").fetchone()['c']
                     e['nb_courses']      = ec.execute("SELECT COUNT(*) as c FROM courses").fetchone()['c']
@@ -188,7 +224,10 @@ class API:
             slug, i   = base_slug, 1
             while conn.execute("SELECT id FROM evenements WHERE slug=?", (slug,)).fetchone():
                 slug = f"{base_slug}_{i}"; i += 1
+
+            # ── Chemin relatif : toujours dans RACES_DIR à côté de main.py ──
             db_path = os.path.join(RACES_DIR, f"{slug}.db")
+
             ec = sqlite3.connect(db_path)
             init_event_db(ec)
             ec.close()
@@ -197,7 +236,7 @@ class API:
                 (nom, data.get('date',''), data.get('lieu',''), data.get('description',''), slug, db_path)
             )
             conn.commit()
-            log.info(f"  → événement créé : {slug}")
+            log.info(f"  → événement créé : {slug} ({db_path})")
             return {"success": True}
         except Exception as e:
             log.error(f"  ERREUR: {e}\n{traceback.format_exc()}")
@@ -225,8 +264,9 @@ class API:
             row  = conn.execute("SELECT db_path FROM evenements WHERE id=?", (eid,)).fetchone()
             if row:
                 try:
-                    os.remove(row['db_path'])
-                except FileNotFoundError:
+                    resolved = resolve_db_path(row['db_path'], eid)
+                    os.remove(resolved)
+                except (FileNotFoundError, Exception):
                     pass
             conn.execute("DELETE FROM evenements WHERE id=?", (eid,))
             conn.commit()
@@ -243,10 +283,17 @@ class API:
             row  = conn.execute("SELECT * FROM evenements WHERE id=?", (eid,)).fetchone()
             if not row:
                 return {"success": False, "error": "Événement introuvable"}
-            ec = open_event_db(row['db_path'])
+
+            # ── Résolution du chemin (auto-correction si projet déplacé) ──
+            try:
+                db_path = resolve_db_path(row['db_path'], eid)
+            except FileNotFoundError as fnf:
+                return {"success": False, "error": str(fnf)}
+
+            ec = open_event_db(db_path)
             init_event_db(ec)
             _event_info = {"id": row['id'], "nom": row['nom'], "date": row['date'], "lieu": row['lieu']}
-            log.info(f"  → ouvert : {row['nom']}")
+            log.info(f"  → ouvert : {row['nom']} ({db_path})")
             return {"success": True, "evenement": _event_info}
         except Exception as e:
             log.error(f"  ERREUR: {e}\n{traceback.format_exc()}")
@@ -324,8 +371,6 @@ class API:
     def auto_assign_dossards(self, start=1):
         try:
             conn = get_event_db()
-            # Grouper par établissement (ordre alphabétique), tri nom/prénom dans chaque groupe
-            # Participants sans établissement regroupés en dernier
             rows = conn.execute("""
                 SELECT id, etablissement FROM participants
                 ORDER BY
@@ -335,7 +380,7 @@ class API:
                     prenom COLLATE NOCASE
             """).fetchall()
 
-            GAP = 5  # numéros de marge entre chaque établissement
+            GAP = 5
             current      = int(start)
             current_etab = None
             count        = 0
@@ -345,7 +390,6 @@ class API:
                 if current_etab is None:
                     current_etab = etab
                 elif etab != current_etab:
-                    # Prochain multiple de GAP + GAP (ex: après 23 → 30)
                     current = (((current - 1) // GAP) + 2) * GAP + 1
                     current_etab = etab
                 conn.execute("UPDATE participants SET dossard=? WHERE id=?", (current, p["id"]))
@@ -614,10 +658,6 @@ class API:
     # ─── IMPORT PARTICIPANTS ──────────────────────────────────────────────────────
 
     def parse_import_file(self, file_b64, filename, etablissement_override=""):
-        """
-        Reçoit un fichier CSV ou XLSX encodé en base64.
-        Retourne un aperçu : liste de lignes avec statut (ok / warning / doublon / erreur).
-        """
         import base64, io, csv
         log.info(f"API.parse_import_file() filename={filename}")
         try:
@@ -627,7 +667,6 @@ class API:
             rows_raw = []
 
             if ext == "csv":
-                # Détecter le séparateur
                 sample = raw[:2048].decode("utf-8-sig", errors="replace")
                 dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
                 reader = csv.DictReader(
@@ -651,7 +690,6 @@ class API:
             else:
                 return {"success": False, "error": f"Format non supporté : .{ext}"}
 
-            # Mapping flexible des colonnes
             ALIASES = {
                 "nom":           ["nom", "name", "last_name", "lastname", "family_name"],
                 "prenom":        ["prenom", "prénom", "first_name", "firstname", "given_name"],
@@ -665,12 +703,11 @@ class API:
             def map_col(row, field):
                 for alias in ALIASES[field]:
                     for k in row:
-                        if k == alias or k.strip("'\"\t ") == alias:
+                        if k == alias or k.strip("'\"\\t ") == alias:
                             return row[k]
                 return ""
 
             def normalize_name(s):
-                """Title case + gestion des noms composés"""
                 if not s:
                     return ""
                 return " ".join(w.capitalize() for w in s.strip().split())
@@ -683,7 +720,6 @@ class API:
                     return "M"
                 return ""
 
-            # Participants déjà en base pour détection des doublons
             conn = get_event_db()
             existing = conn.execute("SELECT nom, prenom, classe FROM participants").fetchall()
             existing_set = {(r["nom"].lower(), r["prenom"].lower()) for r in existing}
@@ -694,7 +730,7 @@ class API:
                 prenom = normalize_name(map_col(raw_row, "prenom"))
 
                 if not nom and not prenom:
-                    continue  # ligne vide, on ignore
+                    continue
 
                 warnings = []
                 statut   = "ok"
@@ -706,15 +742,12 @@ class API:
                     statut = "erreur"
                     warnings.append("Prénom manquant")
 
-                # Doublon
                 if nom and prenom and (nom.lower(), prenom.lower()) in existing_set:
                     statut = "doublon"
                     warnings.append("Déjà présent dans l'événement")
 
-                # Établissement
                 etab = etablissement_override.strip() if etablissement_override.strip() else normalize_name(map_col(raw_row, "etablissement"))
 
-                # VMA
                 vma_raw = map_col(raw_row, "vma").replace(",", ".")
                 vma = None
                 try:
@@ -725,13 +758,11 @@ class API:
                     statut = "warning"
                     warnings.append("VMA manquante")
 
-                # Sexe
                 sexe = normalize_sexe(map_col(raw_row, "sexe"))
                 if not sexe and statut == "ok":
                     statut = "warning"
                     warnings.append("Sexe non renseigné")
 
-                # Dossard
                 dossard_raw = map_col(raw_row, "dossard")
                 dossard = None
                 try:
@@ -739,7 +770,6 @@ class API:
                 except ValueError:
                     pass
 
-                # Classe
                 classe = map_col(raw_row, "classe").strip()
 
                 result.append({
@@ -770,9 +800,6 @@ class API:
             return {"success": False, "error": str(e)}
 
     def confirm_import(self, rows, skip_doublons=True):
-        """
-        Insère en base les lignes validées (statut != erreur, doublons selon option).
-        """
         log.info(f"API.confirm_import() nb_rows={len(rows)}")
         try:
             rows = parse_arg(rows) if isinstance(rows, str) else rows
@@ -807,13 +834,9 @@ class API:
             return {"success": False, "error": str(e)}
 
 
-        # ─── EXPORT ──────────────────────────────────────────────────────────────────
+    # ─── EXPORT ──────────────────────────────────────────────────────────────────
 
     def export_file(self, params_json):
-        """
-        Export unifié : context=(participants|course), format=(pdf|csv|xlsx),
-        filters={sexe, etablissement, classe}
-        """
         import json as _json
         log.info(f"API.export_file() params={params_json}")
         try:
@@ -826,7 +849,6 @@ class API:
             conn  = get_event_db()
             event = _event_info or {}
 
-            # ── Récupérer les lignes selon le contexte ──
             if context == "course" and course_id:
                 course = conn.execute("SELECT * FROM courses WHERE id=?", (course_id,)).fetchone()
                 rows = conn.execute("""
@@ -842,7 +864,6 @@ class API:
 
             rows = [dict(r) for r in rows]
 
-            # ── Appliquer les filtres (ET) ──
             sexe  = filters.get("sexe", "")
             etab  = filters.get("etablissement", "")
             cls   = filters.get("classe", "")
@@ -850,7 +871,6 @@ class API:
             if etab:  rows = [r for r in rows if r.get("etablissement") == etab]
             if cls:   rows = [r for r in rows if r.get("classe") == cls]
 
-            # ── Dossier exports ──
             exports_dir = os.path.join(BASE_DIR, "exports")
             os.makedirs(exports_dir, exist_ok=True)
 
@@ -858,7 +878,6 @@ class API:
             filter_tag = "_".join(filter(None, [sexe, etab, cls])).replace(" ", "_")
             if filter_tag: safe_title += f"_{filter_tag}"
 
-            # ════════════════════════════════
             if fmt == "csv":
                 import csv, io
                 path = os.path.join(exports_dir, f"{safe_title}.csv")
@@ -869,7 +888,6 @@ class API:
                     for r in rows:
                         writer.writerow({k: (r.get(k) or "") for k in ["dossard","nom","prenom","classe","etablissement","sexe","vma"]})
 
-            # ════════════════════════════════
             elif fmt == "xlsx":
                 import openpyxl
                 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -891,7 +909,6 @@ class API:
                     bottom=Side(style="thin", color=border_color),
                 )
 
-                # Titre événement
                 ws.merge_cells("A1:G1")
                 title_cell = ws["A1"]
                 title_cell.value = f"CROSSCONTROL — {event.get('nom','')} — {title_line}"
@@ -900,7 +917,6 @@ class API:
                 title_cell.alignment = Alignment(horizontal="left", vertical="center")
                 ws.row_dimensions[1].height = 22
 
-                # Infos filtres
                 ws.merge_cells("A2:G2")
                 info_parts = []
                 if sexe:  info_parts.append(f"Sexe : {sexe}")
@@ -912,7 +928,6 @@ class API:
                 ws["A2"].fill  = PatternFill("solid", fgColor=dark)
                 ws.row_dimensions[2].height = 14
 
-                # En-têtes
                 headers = ["Dossard", "Nom", "Prénom", "Classe", "Établissement", "Sexe", "VMA"]
                 col_w   = [10, 20, 20, 12, 25, 8, 8]
                 for ci, (h, w) in enumerate(zip(headers, col_w), 1):
@@ -924,7 +939,6 @@ class API:
                     ws.column_dimensions[get_column_letter(ci)].width = w
                 ws.row_dimensions[3].height = 18
 
-                # Données
                 for ri, r in enumerate(rows, 4):
                     bg = light if ri % 2 == 0 else "FFFFFFFF"
                     vals = [
@@ -948,7 +962,6 @@ class API:
                 path = os.path.join(exports_dir, f"{safe_title}.xlsx")
                 wb.save(path)
 
-            # ════════════════════════════════
             else:  # pdf
                 from reportlab.lib.pagesizes import A4
                 from reportlab.lib import colors
@@ -1014,7 +1027,6 @@ class API:
                 story.append(t)
                 doc.build(story)
 
-            # ── Ouvrir le fichier ──
             import subprocess
             if os.name == "nt":
                 os.startfile(path)
@@ -1063,6 +1075,358 @@ class API:
         except Exception as e:
             log.error(f"  ERREUR: {e}"); return {"success": False, "error": str(e)}
 
+    def export_dossards_pdf(self, params_json):
+        """Génère un PDF de dossards A5 (2 par page A4) avec page de garde."""
+        import json as _json, base64, io
+        log.info("API.export_dossards_pdf()")
+        try:
+            from reportlab.lib.pagesizes import A4, A5
+            from reportlab.lib import colors
+            from reportlab.lib.units import mm
+            from reportlab.pdfgen import canvas as rl_canvas
+            from reportlab.lib.utils import ImageReader
+
+            params        = _json.loads(params_json)
+            parts         = params["participants"]
+            event_name    = params.get("event_name", "")
+            etab_filter   = params.get("etab_filter", "")
+            classe_filter = params.get("classe_filter", "")
+            group_by_cls  = params.get("group_by_classe", False)
+            show_vma      = params.get("show_vma", False)
+            show_courses  = params.get("show_courses", False)
+            hex_color     = params.get("bandeau_color", "#d60a3c")
+            logos_data    = params.get("logos", [])
+
+            # Enrichir chaque participant avec ses courses si demandé
+            if show_courses:
+                conn = get_event_db()
+                pid_to_courses = {}
+                rows = conn.execute("""
+                    SELECT cp.participant_id, c.nom
+                    FROM course_participants cp
+                    JOIN courses c ON c.id = cp.course_id
+                    ORDER BY c.created_at
+                """).fetchall()
+                for row in rows:
+                    pid_to_courses.setdefault(row["participant_id"], []).append(row["nom"])
+                for p in parts:
+                    p["_courses"] = pid_to_courses.get(p["id"], [])
+
+            def hex_to_rgb(h):
+                h = h.lstrip("#")
+                return tuple(int(h[i:i+2], 16)/255 for i in (0, 2, 4))
+
+            bandeau_rgb = hex_to_rgb(hex_color)
+
+            logo_images = []
+            for l in logos_data:
+                try:
+                    raw = base64.b64decode(l["b64"])
+                    logo_images.append(ImageReader(io.BytesIO(raw)))
+                except Exception:
+                    pass
+
+            exports_dir = os.path.join(BASE_DIR, "exports")
+            os.makedirs(exports_dir, exist_ok=True)
+            safe_etab   = (etab_filter or "tous").replace(" ", "_")
+            safe_cls    = ("_" + classe_filter.replace(" ", "_")) if classe_filter else ""
+            safe_gc     = "_par_classe" if group_by_cls else ""
+            path = os.path.join(exports_dir, f"dossards_{safe_etab}{safe_cls}{safe_gc}.pdf")
+
+            A4w, A4h = A4
+            PAGE_W   = A4w
+            PAGE_H   = A4h
+
+            dos_w = A4w
+            dos_h = A4h / 2
+
+            BANDEAU_H  = dos_h * 0.15
+            MARGIN     = 8 * mm
+            TOP_ZONE   = dos_h * 0.13
+            NUM_Y      = dos_h * 0.44
+            ETAB_Y     = dos_h * 0.275
+
+            c = rl_canvas.Canvas(path, pagesize=A4)
+
+            # ── Page de garde ──
+            c.setFillColor(colors.white)
+            c.rect(0, 0, A4w, A4h, fill=1, stroke=0)
+
+            GARDE_BANDEAU_H = 28 * mm
+            c.setFillColorRGB(*bandeau_rgb)
+            c.rect(0, 0, A4w, GARDE_BANDEAU_H, fill=1, stroke=0)
+
+            if logo_images:
+                logo_h  = GARDE_BANDEAU_H * 0.65
+                spacing = A4w / (len(logo_images) + 1)
+                for i, img in enumerate(logo_images):
+                    try:
+                        iw, ih = img.getSize()
+                        ratio  = iw / ih
+                        logo_w = logo_h * ratio
+                        lx = spacing * (i + 1) - logo_w / 2
+                        ly = (GARDE_BANDEAU_H - logo_h) / 2
+                        c.drawImage(img, lx, ly, logo_w, logo_h, mask="auto")
+                    except Exception:
+                        pass
+
+            dossards = sorted([p["dossard"] for p in parts if p.get("dossard")])
+            d_min = dossards[0] if dossards else "?"
+            d_max = dossards[-1] if dossards else "?"
+
+            c.setFillColor(colors.HexColor("#888888"))
+            c.setFont("Helvetica", 10)
+            c.drawCentredString(A4w/2, A4h * 0.65, event_name.upper())
+
+            c.setStrokeColorRGB(*bandeau_rgb)
+            c.setLineWidth(2)
+            c.line(A4w*0.35, A4h*0.63, A4w*0.65, A4h*0.63)
+
+            c.setFillColorRGB(*bandeau_rgb)
+            c.setFont("Helvetica-Bold", 38)
+            c.drawCentredString(A4w/2, A4h * 0.53, f"Dossards {d_min} à {d_max}")
+
+            c.setFillColor(colors.HexColor("#333333"))
+            c.setFont("Helvetica", 16)
+            if classe_filter:
+                label_main = classe_filter
+                label_sub  = etab_filter if etab_filter else "Tous les établissements"
+            elif etab_filter:
+                label_main = etab_filter
+                label_sub  = ""
+            else:
+                label_main = "Tous les établissements"
+                label_sub  = ""
+            if group_by_cls:
+                label_main = label_main + " — par classe"
+            c.drawCentredString(A4w/2, A4h * 0.46, label_main)
+            if label_sub:
+                c.setFillColor(colors.HexColor("#888888"))
+                c.setFont("Helvetica", 12)
+                c.drawCentredString(A4w/2, A4h * 0.415, label_sub)
+
+            c.setFillColor(colors.HexColor("#aaaaaa"))
+            c.setFont("Helvetica", 10)
+            c.drawCentredString(A4w/2, A4h * 0.38, f"{len(parts)} dossard(s)")
+
+            c.showPage()
+
+            # ── Pages dossards ──
+            def draw_dossard(p_data, y_offset):
+                x0 = 0
+                y0 = y_offset
+
+                c.setFillColor(colors.white)
+                c.rect(x0, y0, dos_w, dos_h, fill=1, stroke=0)
+
+                c.setStrokeColor(colors.HexColor("#cccccc"))
+                c.setLineWidth(0.5)
+                if y_offset == dos_h:
+                    c.line(x0 + MARGIN*2, y0, x0 + dos_w - MARGIN*2, y0)
+
+                c.setFillColor(colors.HexColor("#111111"))
+                c.setFont("Helvetica-Bold", 13)
+                c.drawCentredString(x0 + dos_w/2, y0 + dos_h - TOP_ZONE*0.55, event_name.upper())
+
+                c.setStrokeColor(colors.HexColor("#e0e0e0"))
+                c.setLineWidth(0.5)
+                c.line(x0 + dos_w*0.1, y0 + dos_h - TOP_ZONE*0.85,
+                       x0 + dos_w*0.9, y0 + dos_h - TOP_ZONE*0.85)
+
+                # Adapter la position du numéro et des infos selon les extras
+                has_extra = show_vma or show_courses
+                num_offset_factor = 0.44 if not has_extra else 0.415
+                info_line1_factor = 0.275 if not has_extra else 0.305
+                info_line2_factor = 0.235  # VMA / courses
+
+                num_str = str(p_data.get("dossard", ""))
+                font_size = 96 if len(num_str) <= 3 else 72 if len(num_str) == 4 else 58
+                c.setFillColor(colors.HexColor("#111111"))
+                c.setFont("Helvetica-Bold", font_size)
+                c.drawCentredString(x0 + dos_w/2, y0 + dos_h - num_offset_factor*dos_h - font_size*0.35, num_str)
+
+                # ── Ligne 1 : Nom | Classe | Établissement ──
+                line1_y = y0 + BANDEAU_H + dos_h * info_line1_factor
+                nom_complet = f"{p_data.get('prenom', '')} {p_data.get('nom', '')}".strip()
+                classe_val  = p_data.get("classe", "") or ""
+                etab_val    = p_data.get("etablissement", "") or ""
+
+                info_font = 11
+                c.setFont("Helvetica", info_font)
+
+                # Construire les segments et les mesurer
+                seg_texts  = [s for s in [nom_complet, classe_val, etab_val] if s]
+                seg_colors = []
+                for i, s in enumerate(seg_texts):
+                    if i == 0: seg_colors.append(colors.HexColor("#222222"))
+                    elif i == 1 and classe_val and s == classe_val: seg_colors.append(colors.HexColor("#555555"))
+                    else: seg_colors.append(colors.HexColor("#444444"))
+
+                sep = "  |  "
+                full_str = sep.join(seg_texts)
+                total_w  = c.stringWidth(full_str, "Helvetica", info_font)
+                cur_x    = x0 + dos_w/2 - total_w/2
+
+                for i, (text, col) in enumerate(zip(seg_texts, seg_colors)):
+                    if i > 0:
+                        c.setFillColor(colors.HexColor("#cccccc"))
+                        c.drawString(cur_x, line1_y, sep)
+                        cur_x += c.stringWidth(sep, "Helvetica", info_font)
+                    c.setFillColor(col)
+                    c.drawString(cur_x, line1_y, text)
+                    cur_x += c.stringWidth(text, "Helvetica", info_font)
+
+                # ── Ligne 2 : VMA · Courses ──
+                if has_extra:
+                    line2_y = y0 + BANDEAU_H + dos_h * info_line2_factor
+                    extra_parts = []
+                    if show_vma and p_data.get("vma") is not None:
+                        try:
+                            vma_val = float(p_data["vma"])
+                            extra_parts.append(("bold",   f"VMA : {vma_val:.1f} km/h", colors.HexColor("#888888")))
+                        except (ValueError, TypeError):
+                            pass
+                    if show_courses:
+                        courses_list = p_data.get("_courses", [])
+                        if courses_list:
+                            extra_parts.append(("normal", ", ".join(courses_list), colors.HexColor("#888888")))
+                        else:
+                            extra_parts.append(("normal", "Aucune course", colors.HexColor("#bbbbbb")))
+
+                    if extra_parts:
+                        extra_font = 9
+                        dot = "  ·  "
+                        parts_str = dot.join(t for _, t, _ in extra_parts)
+                        total_ew  = c.stringWidth(parts_str, "Helvetica", extra_font)
+                        ex = x0 + dos_w/2 - total_ew/2
+                        # recalcul segment par segment pour le gras
+                        for i, (style, text, col) in enumerate(extra_parts):
+                            if i > 0:
+                                c.setFillColor(colors.HexColor("#cccccc"))
+                                c.setFont("Helvetica", extra_font)
+                                c.drawString(ex, line2_y, dot)
+                                ex += c.stringWidth(dot, "Helvetica", extra_font)
+                            font_name = "Helvetica-Bold" if style == "bold" else "Helvetica"
+                            c.setFont(font_name, extra_font)
+                            c.setFillColor(col)
+                            c.drawString(ex, line2_y, text)
+                            ex += c.stringWidth(text, font_name, extra_font)
+
+                c.setStrokeColor(colors.HexColor("#e0e0e0"))
+                c.setLineWidth(0.5)
+                c.line(x0 + dos_w*0.1, y0 + BANDEAU_H + 1,
+                       x0 + dos_w*0.9, y0 + BANDEAU_H + 1)
+
+                c.setFillColorRGB(*bandeau_rgb)
+                c.rect(x0, y0, dos_w, BANDEAU_H, fill=1, stroke=0)
+
+                if logo_images:
+                    logo_h   = BANDEAU_H * 0.65
+                    spacing  = dos_w / (len(logo_images) + 1)
+                    for i, img in enumerate(logo_images):
+                        try:
+                            iw, ih = img.getSize()
+                            ratio  = iw / ih
+                            logo_w = logo_h * ratio
+                            lx = x0 + spacing * (i + 1) - logo_w / 2
+                            ly = y0 + (BANDEAU_H - logo_h) / 2
+                            c.drawImage(img, lx, ly, logo_w, logo_h, mask="auto")
+                        except Exception:
+                            pass
+
+            def draw_section_cover(classe_name, etab_name, section_parts):
+                """Page de garde intercalaire pour une section de classe."""
+                c.setFillColor(colors.white)
+                c.rect(0, 0, A4w, A4h, fill=1, stroke=0)
+
+                GARDE_BANDEAU_H = 28 * mm
+                c.setFillColorRGB(*bandeau_rgb)
+                c.rect(0, 0, A4w, GARDE_BANDEAU_H, fill=1, stroke=0)
+
+                if logo_images:
+                    logo_h  = GARDE_BANDEAU_H * 0.65
+                    spacing = A4w / (len(logo_images) + 1)
+                    for i, img in enumerate(logo_images):
+                        try:
+                            iw, ih = img.getSize()
+                            ratio  = iw / ih
+                            logo_w = logo_h * ratio
+                            lx = spacing * (i + 1) - logo_w / 2
+                            ly = (GARDE_BANDEAU_H - logo_h) / 2
+                            c.drawImage(img, lx, ly, logo_w, logo_h, mask="auto")
+                        except Exception:
+                            pass
+
+                c.setFillColor(colors.HexColor("#888888"))
+                c.setFont("Helvetica", 10)
+                c.drawCentredString(A4w/2, A4h * 0.65, event_name.upper())
+
+                c.setStrokeColorRGB(*bandeau_rgb)
+                c.setLineWidth(2)
+                c.line(A4w*0.35, A4h*0.63, A4w*0.65, A4h*0.63)
+
+                c.setFillColorRGB(*bandeau_rgb)
+                c.setFont("Helvetica-Bold", 42)
+                c.drawCentredString(A4w/2, A4h * 0.53, classe_name)
+
+                c.setFillColor(colors.HexColor("#333333"))
+                c.setFont("Helvetica", 16)
+                c.drawCentredString(A4w/2, A4h * 0.46, etab_name if etab_name else "Tous les établissements")
+
+                sec_doss = sorted([p["dossard"] for p in section_parts if p.get("dossard")])
+                sec_min  = sec_doss[0] if sec_doss else "?"
+                sec_max  = sec_doss[-1] if sec_doss else "?"
+                c.setFillColor(colors.HexColor("#aaaaaa"))
+                c.setFont("Helvetica", 10)
+                c.drawCentredString(A4w/2, A4h * 0.40, f"Dossards {sec_min} à {sec_max} — {len(section_parts)} dossard(s)")
+
+                c.showPage()
+
+            def draw_parts_batch(batch):
+                for i in range(0, len(batch), 2):
+                    p1 = batch[i]
+                    p2 = batch[i+1] if i+1 < len(batch) else None
+                    draw_dossard(p1, dos_h)
+                    if p2:
+                        draw_dossard(p2, 0)
+                    else:
+                        c.setFillColor(colors.white)
+                        c.rect(0, 0, dos_w, dos_h, fill=1, stroke=0)
+                    c.showPage()
+
+            if group_by_cls:
+                # Grouper par (classe, etablissement) pour gérer les homonymes inter-étab
+                from collections import OrderedDict
+                groups = OrderedDict()
+                for p in parts:
+                    cls_key  = p.get("classe") or "Sans classe"
+                    etab_key = p.get("etablissement") or ""
+                    # Si un seul établissement ou filtre étab actif → clé = classe seule
+                    # Sinon → distinguer par établissement
+                    key = (cls_key, etab_key)
+                    groups.setdefault(key, []).append(p)
+
+                for (cls_key, etab_key), group_parts in groups.items():
+                    draw_section_cover(cls_key, etab_key, group_parts)
+                    draw_parts_batch(group_parts)
+            else:
+                draw_parts_batch(parts)
+
+            c.save()
+            log.info(f"Dossards PDF généré : {path}")
+
+            if os.name == "nt":
+                os.startfile(path)
+            else:
+                import subprocess
+                subprocess.Popen(["xdg-open", path])
+
+            return {"success": True, "path": path, "count": len(parts)}
+
+        except Exception as e:
+            log.error(f"export_dossards_pdf ERREUR: {e}\n{traceback.format_exc()}")
+            return {"success": False, "error": str(e)}
+
     def get_stats(self):
         try:
             conn = get_event_db()
@@ -1082,7 +1446,7 @@ def main():
     log.info("=== Démarrage CrossControl ===")
     log.info(f"Python {sys.version}")
     init_events_db()
-    html_path = os.path.join(BASE_DIR, "app.html")
+    html_path = os.path.join(RESOURCE_DIR, "app.html")
     webview.create_window(
         "CrossControl",
         html_path,
@@ -1091,7 +1455,7 @@ def main():
         height=1080,
         min_size=(900, 600)
     )
-    webview.start(debug=True)
+    webview.start()
 
 if __name__ == "__main__":
     main()

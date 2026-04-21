@@ -224,6 +224,7 @@ function render() {
     terminees:    'Courses terminées',
     classement:   'Classement & résultats',
     statistiques: 'Statistiques',
+    dossards:      'Dossards',
     parametres:   'Paramètres',
   };
   document.getElementById('page-title').textContent       = titles[state.page] || '';
@@ -236,6 +237,7 @@ function render() {
     terminees:    renderTerminees,
     classement:    renderClassement,
     statistiques:  renderStatistiques,
+    dossards:       renderDossards,
     parametres:    renderParametres,
   };
   (pages[state.page] || (() => {}))();
@@ -781,10 +783,34 @@ function statusBadge(s) {
 // ════════════════════════════════════════════════════════════════════════════════
 let liveSelectedId = null;
 let liveArrivees   = [];
-let timerInterval  = null;
-let timerStart     = null;
-let timerElapsed   = 0;
-let timerRunning   = false;
+
+// ── CHRONO : un état par course ──────────────────────────────────────────────
+// { [courseId]: { elapsed: Number (secondes), running: Boolean, startedAt: Number (ms) | null } }
+const timerState = {};
+
+function _getTimer(id) {
+  if (!timerState[id]) {
+    timerState[id] = { elapsed: 0, running: false, startedAt: null };
+  }
+  return timerState[id];
+}
+
+// Interval global unique — tourne en permanence, met à jour tous les chronos actifs
+setInterval(() => {
+  let anyRunning = false;
+  for (const id in timerState) {
+    const t = timerState[id];
+    if (t.running) {
+      t.elapsed = (Date.now() - t.startedAt) / 1000;
+      anyRunning = true;
+    }
+  }
+  // Mettre à jour l'affichage seulement si on est sur la page live
+  if (liveSelectedId && timerState[liveSelectedId]) {
+    const el = document.getElementById('timer-display');
+    if (el) el.textContent = formatTime(timerState[liveSelectedId].elapsed);
+  }
+}, 200);
 
 function selectCourseForLive(id) { liveSelectedId = id; renderLive(); }
 
@@ -792,7 +818,7 @@ async function renderLive() {
   document.getElementById('content').innerHTML = `
     <div class="course-select-bar">
       <label>Sélectionner une course</label>
-      <select id="live-course-select" onchange="liveSelectedId=parseInt(this.value)||null;resetLiveState();loadLiveArrivees()">
+      <select id="live-course-select" onchange="liveSelectedId=parseInt(this.value)||null;loadLiveArrivees()">
         <option value="">— Choisir —</option>
         ${state.courses.filter(c=>c.statut!=='terminee').map(c=>
           `<option value="${c.id}" ${c.id===liveSelectedId?'selected':''}>${c.nom}</option>`
@@ -810,10 +836,9 @@ async function loadLiveArrivees() {
   renderLiveBody(state.courses.find(c => c.id === liveSelectedId));
 }
 
-function resetLiveState() { stopTimer(); timerElapsed = 0; timerStart = null; liveArrivees = []; }
-
 function renderLiveBody(course) {
   if (!course) { document.getElementById('live-body').innerHTML = ''; return; }
+  const t          = _getTimer(course.id);
   const isStarted  = course.statut === 'en_cours' || course.statut === 'terminee';
   const isFinished = course.statut === 'terminee';
 
@@ -822,12 +847,12 @@ function renderLiveBody(course) {
       <div>
         <div class="timer-block">
           <div class="timer-label">Chronomètre</div>
-          <div class="timer-display" id="timer-display">${formatTime(timerElapsed)}</div>
+          <div class="timer-display" id="timer-display">${formatTime(t.elapsed)}</div>
           <div class="timer-label">${course.nom}</div>
           <div class="timer-controls">
             ${!isStarted ? `<button class="btn btn-success" onclick="startRace()">Démarrer</button>` : ''}
             ${isStarted && !isFinished ? `
-              ${timerRunning
+              ${t.running
                 ? `<button class="btn btn-ghost" onclick="pauseTimer()">Pause</button>`
                 : `<button class="btn btn-success" onclick="resumeTimer()">Reprendre</button>`}
               <button class="btn btn-danger" onclick="finishRace()">Terminer</button>
@@ -901,39 +926,39 @@ function renderLiveBody(course) {
 
 async function startRace() {
   const res = await call('start_course', liveSelectedId);
-  if (res?.success) { startTimer(); await refreshData(); await loadLiveArrivees(); toast('Course démarrée !'); }
+  if (res?.success) {
+    const t = _getTimer(liveSelectedId);
+    t.elapsed   = 0;
+    t.startedAt = Date.now();
+    t.running   = true;
+    await refreshData();
+    await loadLiveArrivees();
+    toast('Course démarrée !');
+  }
 }
 async function finishRace() {
   if (!confirm('Terminer la course ?')) return;
-  stopTimer();
+  const t = _getTimer(liveSelectedId);
+  t.running = false;
   await call('finish_course', liveSelectedId);
-  await refreshData(); await loadLiveArrivees();
+  await refreshData();
+  await loadLiveArrivees();
   toast('Course terminée !');
 }
-function startTimer() {
-  timerStart = Date.now() - timerElapsed * 1000; timerRunning = true;
-  timerInterval = setInterval(() => {
-    timerElapsed = (Date.now() - timerStart) / 1000;
-    const el = document.getElementById('timer-display');
-    if (el) el.textContent = formatTime(timerElapsed);
-  }, 200);
-}
 function pauseTimer() {
-  timerRunning = false; clearInterval(timerInterval);
+  const t = _getTimer(liveSelectedId);
+  t.running = false;
   renderLiveBody(state.courses.find(c => c.id === liveSelectedId));
 }
 function resumeTimer() {
-  timerStart = Date.now() - timerElapsed * 1000; timerRunning = true;
+  const t = _getTimer(liveSelectedId);
+  t.startedAt = Date.now() - t.elapsed * 1000;
+  t.running   = true;
   renderLiveBody(state.courses.find(c => c.id === liveSelectedId));
-  timerInterval = setInterval(() => {
-    timerElapsed = (Date.now() - timerStart) / 1000;
-    const el = document.getElementById('timer-display');
-    if (el) el.textContent = formatTime(timerElapsed);
-  }, 200);
 }
-function stopTimer() { timerRunning = false; clearInterval(timerInterval); }
 async function recordArrival() {
-  const res = await call('enregistrer_arrivee', liveSelectedId, timerElapsed);
+  const t   = _getTimer(liveSelectedId);
+  const res = await call('enregistrer_arrivee', liveSelectedId, t.elapsed);
   if (res?.success) {
     const btn = document.getElementById('btn-arrive');
     if (btn) { btn.style.transform = 'scale(0.97)'; setTimeout(() => btn.style.transform='', 150); }
@@ -970,7 +995,7 @@ async function renderTerminees() {
   document.getElementById('topbar-actions').innerHTML = '';
   document.getElementById('content').innerHTML = `
     <div class="two-col">
-      <div>
+      <div style="display:flex;flex-direction:column;gap:16px">
         <div class="card">
           <div class="card-title">Courses terminées</div>
           ${courses.length ? `<table>
@@ -984,6 +1009,9 @@ async function renderTerminees() {
               </tr>`).join('')}
             </tbody>
           </table>` : `<div class="empty"><div class="empty-icon">✅</div><p>Aucune course terminée.</p></div>`}
+        </div>
+        <div id="terminees-non-arrives">
+          <!-- Rempli par loadTermineesDetail() si une course est sélectionnée -->
         </div>
       </div>
       <div id="terminees-detail">
@@ -1004,8 +1032,46 @@ async function toggleMasquerTerminee(cid) {
 
 async function loadTermineesDetail() {
   const arrs   = (await call('get_arrivees', termineesSelectedId)) || [];
+  const courseParticipantsList = (await call('get_course_participants', termineesSelectedId)) || [];
   const course = state.courses.find(c => c.id === termineesSelectedId)
               || ((await call('get_courses_terminees')) || []).find(c => c.id === termineesSelectedId);
+
+  // Normaliser les IDs pour comparaison fiable
+  const arrivedDossards = new Set(arrs.map(a => parseInt(a.dossard_saisi)).filter(Boolean));
+  const arrivedParticipantIds = new Set(arrs.map(a => parseInt(a.participant_id)).filter(Boolean));
+  const nonArrivees = courseParticipantsList.filter(p =>
+    !arrivedParticipantIds.has(parseInt(p.id)) && !arrivedDossards.has(parseInt(p.dossard))
+  );
+
+  // Stocker pour la vérification en temps réel du dossard saisi
+  window._termineesCurrentCourseParticipants = courseParticipantsList;
+
+  // ── Bloc gauche : participants non arrivés ──────────────────────────────────
+  const elNonArrivees = document.getElementById('terminees-non-arrives');
+  if (elNonArrivees) {
+    elNonArrivees.innerHTML = nonArrivees.length ? `
+      <div class="card" style="border-left:3px solid rgba(255,160,0,.7)">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+          <div class="card-title" style="margin-bottom:0">⚠️ Inscrits non arrivés</div>
+          <span class="badge badge-orange">${nonArrivees.length}</span>
+        </div>
+        <div style="max-height:320px;overflow-y:auto">
+          <table style="margin:0">
+            <thead><tr><th>Dossard</th><th>Nom</th><th>Classe</th><th>VMA</th></tr></thead>
+            <tbody>${nonArrivees.map(p => `
+              <tr>
+                <td><span class="badge badge-yellow">${p.dossard ?? '—'}</span></td>
+                <td><strong>${p.nom} ${p.prenom}</strong><br><span style="font-size:11px;color:var(--text3)">${p.etablissement || ''}</span></td>
+                <td>${p.classe || '—'}</td>
+                <td><span class="badge badge-${vmaColor(p.vma)}">${p.vma ?? '—'}</span></td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>` : '';
+  }
+
+  // ── Bloc droite : détail / modification des arrivées ───────────────────────
   const el = document.getElementById('terminees-detail');
   if (!el) return;
   el.innerHTML = `
@@ -1017,14 +1083,16 @@ async function loadTermineesDetail() {
       <div class="info-row" style="margin-bottom:16px">
         <div class="info-item"><div class="lbl">Distance</div><div class="val">${course?.distance ? course.distance+'m' : '—'}</div></div>
         <div class="info-item"><div class="lbl">Arrivées</div><div class="val">${arrs.length}</div></div>
+        <div class="info-item"><div class="lbl">Inscrits</div><div class="val">${courseParticipantsList.length}</div></div>
       </div>
       <div style="background:var(--surface2);border-radius:var(--radius);padding:14px;margin-bottom:16px">
         <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;font-family:var(--font-mono);margin-bottom:10px">Ajouter une arrivée manquante</div>
         <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
-          <div class="form-group" style="flex:1;min-width:80px"><label>Dossard</label><input type="number" id="t-dossard" placeholder="N°"></div>
+          <div class="form-group" style="flex:1;min-width:80px"><label>Dossard</label><input type="number" id="t-dossard" placeholder="N°" oninput="_checkDossardTerminees(this.value)"></div>
           <div class="form-group" style="flex:1;min-width:100px"><label>Temps (mm:ss)</label><input type="text" id="t-temps" placeholder="12:34"></div>
           <button class="btn btn-success btn-sm" style="margin-bottom:1px" onclick="ajouterArriveeManuelle()">+ Ajouter</button>
         </div>
+        <div id="t-dossard-hint" style="margin-top:8px;font-size:12px;min-height:18px"></div>
       </div>
       <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;font-family:var(--font-mono);margin-bottom:8px">Arrivées — modifier ou supprimer</div>
       <div style="max-height:420px;overflow-y:auto">
@@ -1048,6 +1116,28 @@ async function loadTermineesDetail() {
       </div>
     </div>
   `;
+}
+
+function _checkDossardTerminees(val) {
+  const hint = document.getElementById('t-dossard-hint');
+  if (!hint) return;
+  const num = parseInt(val);
+  if (!num) { hint.innerHTML = ''; return; }
+
+  // Chercher le participant avec ce numéro de dossard (comparaison numérique)
+  const participant = (state.participants || []).find(p => parseInt(p.dossard) === num);
+  if (!participant) { hint.innerHTML = ''; return; }
+
+  // Vérifier s'il est inscrit à cette course
+  const courseParticipants = window._termineesCurrentCourseParticipants || [];
+  const isInCourse = courseParticipants.some(p => parseInt(p.id) === parseInt(participant.id));
+
+  const nameStr = `${participant.prenom || ''} ${participant.nom || ''}`.trim();
+  if (isInCourse) {
+    hint.innerHTML = `<span style="color:var(--green)">✓ ${nameStr}</span>`;
+  } else {
+    hint.innerHTML = `<span style="color:var(--accent)">⚠ ${nameStr} <em style="font-size:11px;opacity:.8">— Non inscrit à cette course</em></span>`;
+  }
 }
 
 async function ajouterArriveeManuelle() {
@@ -1821,3 +1911,421 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }, 500);
 });
+// ════════════════════════════════════════════════════════════════════════════════
+// PAGE : DOSSARDS
+// ════════════════════════════════════════════════════════════════════════════════
+let _dossardState = {
+  etab:          '',
+  classe:        '',
+  groupByClasse: false,
+  showVma:       false,
+  showCourses:   false,
+  bandeauColor:  '#d60a3c',
+  logos:         [], // [{name, b64}]
+};
+
+function renderDossards() {
+  document.getElementById('topbar-actions').innerHTML = '';
+  const etabs = [...new Set((state.participants || [])
+    .map(p => p.etablissement).filter(Boolean))].sort();
+  const allClasses = [...new Set((state.participants || [])
+    .map(p => p.classe).filter(Boolean))].sort();
+
+  document.getElementById('content').innerHTML = `
+    <div style="display:flex;gap:24px;height:calc(100vh - 112px)">
+
+      <!-- ── Panneau gauche ── -->
+      <div style="width:340px;flex-shrink:0;display:flex;flex-direction:column;gap:16px;overflow-y:auto;padding-right:4px">
+
+        <!-- Filtres -->
+        <div class="card">
+          <div class="card-title">Filtres</div>
+          <div class="form-group">
+            <label>Établissement</label>
+            <select id="dos-etab" onchange="_dossardState.etab=this.value;_dossardUpdateClasses();_dossardPreview()">
+              <option value="">Tous les établissements</option>
+              ${etabs.map(e => `<option value="${e}"${_dossardState.etab===e?' selected':''}>${e}</option>`).join('')}
+            </select>
+          </div>
+          <div class="form-group" style="margin-bottom:0">
+            <label>Classe</label>
+            <select id="dos-classe" onchange="_dossardState.classe=this.value;_dossardPreview()">
+              <option value="">Toutes les classes</option>
+              ${allClasses.map(c => `<option value="${c}"${_dossardState.classe===c?' selected':''}>${c}</option>`).join('')}
+            </select>
+          </div>
+          <div id="dos-count" style="font-size:11px;color:var(--text3);font-family:var(--font-mono);margin-top:8px"></div>
+        </div>
+
+        <!-- Options PDF -->
+        <div class="card">
+          <div class="card-title">Options PDF</div>
+          <div style="display:flex;flex-direction:column;gap:10px">
+            <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;text-transform:none;letter-spacing:0;font-size:13px;font-weight:400;color:var(--text)">
+              <input type="checkbox" id="dos-group-classe"
+                style="width:16px;height:16px;margin-top:2px;accent-color:var(--accent);cursor:pointer;flex-shrink:0"
+                ${_dossardState.groupByClasse ? 'checked' : ''}
+                onchange="_dossardState.groupByClasse=this.checked;_dossardPreview()">
+              <span>
+                <span style="font-weight:600">Générer par classe</span><br>
+                <span style="font-size:11px;color:var(--text3)">Une section et page de garde par classe</span>
+              </span>
+            </label>
+            <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;text-transform:none;letter-spacing:0;font-size:13px;font-weight:400;color:var(--text)">
+              <input type="checkbox" id="dos-show-vma"
+                style="width:16px;height:16px;margin-top:2px;accent-color:var(--accent);cursor:pointer;flex-shrink:0"
+                ${_dossardState.showVma ? 'checked' : ''}
+                onchange="_dossardState.showVma=this.checked;_dossardPreview()">
+              <span>
+                <span style="font-weight:600">Afficher la VMA</span><br>
+                <span style="font-size:11px;color:var(--text3)">La VMA du participant sous son nom</span>
+              </span>
+            </label>
+            <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;text-transform:none;letter-spacing:0;font-size:13px;font-weight:400;color:var(--text)">
+              <input type="checkbox" id="dos-show-courses"
+                style="width:16px;height:16px;margin-top:2px;accent-color:var(--accent);cursor:pointer;flex-shrink:0"
+                ${_dossardState.showCourses ? 'checked' : ''}
+                onchange="_dossardState.showCourses=this.checked;_dossardPreview()">
+              <span>
+                <span style="font-weight:600">Afficher les courses</span><br>
+                <span style="font-size:11px;color:var(--text3)">Les courses auxquelles le participant est inscrit</span>
+              </span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Bandeau -->
+        <div class="card">
+          <div class="card-title">Bandeau bas</div>
+          <div class="form-group">
+            <label>Couleur</label>
+            <div style="display:flex;gap:10px;align-items:center">
+              <input type="color" id="dos-color" value="${_dossardState.bandeauColor}"
+                oninput="_dossardState.bandeauColor=this.value;document.getElementById('dos-color-hex').textContent=this.value;_dossardPreview()"
+                style="width:48px;height:36px;border:none;background:none;cursor:pointer;padding:0">
+              <span id="dos-color-hex" style="font-family:var(--font-mono);font-size:12px;color:var(--text2)">${_dossardState.bandeauColor}</span>
+            </div>
+          </div>
+          <div class="form-group" style="margin-bottom:0">
+            <label>Logos sponsors <span style="font-weight:400;color:var(--text3)">(PNG, JPG)</span></label>
+            <div id="dos-logo-dropzone"
+              style="border:2px dashed var(--border);border-radius:8px;padding:20px;text-align:center;cursor:pointer;transition:all .2s"
+              onclick="document.getElementById('dos-logo-input').click()"
+              ondragover="event.preventDefault();this.style.borderColor='var(--accent)'"
+              ondragleave="this.style.borderColor='var(--border)'"
+              ondrop="_dossardLogoDrop(event)">
+              <div style="font-size:22px;margin-bottom:4px">🖼️</div>
+              <div style="font-size:11px;color:var(--text3)">Déposer ou cliquer pour ajouter</div>
+              <input type="file" id="dos-logo-input" accept="image/png,image/jpeg,image/jpg"
+                multiple style="display:none" onchange="_dossardLogoAdd(this.files)">
+            </div>
+            <div id="dos-logos-list" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px"></div>
+          </div>
+        </div>
+
+        <!-- Générer -->
+        <button class="btn btn-primary" style="width:100%" onclick="_dossardGenerate()">
+          📄 Générer le PDF
+        </button>
+
+      </div>
+
+      <!-- ── Preview droite ── -->
+      <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding-top:8px;overflow:hidden">
+        <div style="font-size:11px;color:var(--text3);font-family:var(--font-mono);margin-bottom:12px;text-transform:uppercase;letter-spacing:1px">Aperçu dossard</div>
+        <canvas id="dos-preview-canvas"
+          style="display:block;border-radius:8px;box-shadow:0 4px 24px rgba(0,0,0,.4);width:480px !important;height:339px !important;flex-shrink:0">
+        </canvas>
+        <div id="dos-preview-label" style="font-size:11px;color:var(--text3);margin-top:10px;font-family:var(--font-mono)"></div>
+      </div>
+
+    </div>
+  `;
+
+  _renderLogosList();
+  _dossardPreview();
+}
+
+function _dossardFiltered() {
+  const etab   = _dossardState.etab;
+  const classe = _dossardState.classe;
+  let all = (state.participants || []).filter(p => p.dossard != null);
+  if (etab)   all = all.filter(p => p.etablissement === etab);
+  if (classe) all = all.filter(p => p.classe === classe);
+  return all;
+}
+
+// Met à jour le select des classes selon l'établissement sélectionné
+function _dossardUpdateClasses() {
+  const etab = _dossardState.etab;
+  const sel  = document.getElementById('dos-classe');
+  if (!sel) return;
+  const participants = state.participants || [];
+  const filtered = etab ? participants.filter(p => p.etablissement === etab) : participants;
+  const classes = [...new Set(filtered.map(p => p.classe).filter(Boolean))].sort();
+  // Réinitialiser la classe si elle n'est plus disponible
+  if (_dossardState.classe && !classes.includes(_dossardState.classe)) {
+    _dossardState.classe = '';
+  }
+  sel.innerHTML = `<option value="">Toutes les classes</option>` +
+    classes.map(c => `<option value="${c}"${_dossardState.classe===c?' selected':''}>${c}</option>`).join('');
+}
+
+async function _dossardPreview() {
+  const parts = _dossardFiltered();
+  const countEl = document.getElementById('dos-count');
+  if (countEl) countEl.textContent = `${parts.length} dossard(s) à générer`;
+
+  const canvas = document.getElementById('dos-preview-canvas');
+  if (!canvas) return;
+
+  const W = 397, H = 280;  // A5 paysage
+  canvas.width  = W;
+  canvas.height = H;
+
+  const ctx = canvas.getContext('2d');
+
+  const p         = parts[0];
+  const eventName = state.evenement?.nom || 'Événement';
+  const color     = _dossardState.bandeauColor;
+  const showVma     = _dossardState.showVma;
+  const showCourses = _dossardState.showCourses;
+
+  const BANDEAU_H = Math.round(H * 0.15);
+  const SEP_TOP_Y = Math.round(H * 0.13);
+  const SEP_BOT_Y = H - BANDEAU_H - 1;
+
+  // Zone info : compacte si on affiche VMA/courses
+  const hasExtra = showVma || showCourses;
+  const INFO_LINE1_Y = Math.round(H * (hasExtra ? 0.685 : 0.725));
+  const INFO_LINE2_Y = Math.round(H * 0.76);
+  // Numéro : légèrement remonté si infos supplémentaires
+  const NUM_CY = Math.round(H * (hasExtra ? 0.415 : 0.44));
+
+  // ── Fond blanc ──
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, W, H);
+
+  // ── Nom événement ──
+  ctx.fillStyle = '#111111';
+  ctx.font = `700 ${Math.round(W * 0.062)}px IBM Plex Sans, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(eventName.toUpperCase(), W / 2, Math.round(SEP_TOP_Y * 0.52));
+
+  // ── Séparateur haut ──
+  ctx.strokeStyle = '#dddddd';
+  ctx.lineWidth = 0.8;
+  ctx.beginPath();
+  ctx.moveTo(W * 0.08, SEP_TOP_Y);
+  ctx.lineTo(W * 0.92, SEP_TOP_Y);
+  ctx.stroke();
+
+  if (p) {
+    // ── Numéro ──
+    const numStr  = String(p.dossard);
+    const numSize = numStr.length <= 3 ? Math.round(W * 0.42)
+                  : numStr.length === 4 ? Math.round(W * 0.32)
+                  : Math.round(W * 0.26);
+    ctx.fillStyle = '#111111';
+    ctx.font = `700 ${numSize}px IBM Plex Mono, monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(numStr, W / 2, NUM_CY);
+
+    // ── Ligne 1 : Nom | Classe | Établissement ──
+    const infoFontSize = Math.round(W * (hasExtra ? 0.042 : 0.048));
+    ctx.font = `400 ${infoFontSize}px IBM Plex Sans, sans-serif`;
+    ctx.textBaseline = 'middle';
+
+    const nomComplet = `${p.prenom || ''} ${p.nom || ''}`.trim();
+    const classe = p.classe || '';
+    const etab   = p.etablissement || '';
+    const GAP = 6;
+
+    // Construire les segments : nom · classe · etab
+    const segments = [
+      { text: nomComplet, color: '#222222' },
+    ];
+    if (classe) segments.push({ text: classe, color: '#555555' });
+    if (etab)   segments.push({ text: etab,   color: '#444444' });
+
+    // Mesurer la largeur totale
+    ctx.font = `400 ${infoFontSize}px IBM Plex Sans, sans-serif`;
+    const sepW  = ctx.measureText(' | ').width;
+    let totalW  = segments.reduce((acc, s, i) => acc + ctx.measureText(s.text).width + (i > 0 ? sepW : 0), 0);
+    let startX  = W / 2 - totalW / 2;
+
+    let cx = startX;
+    segments.forEach((seg, i) => {
+      if (i > 0) {
+        ctx.fillStyle = '#cccccc';
+        ctx.fillText(' | ', cx, INFO_LINE1_Y);
+        cx += sepW;
+      }
+      ctx.fillStyle = seg.color;
+      ctx.textAlign = 'left';
+      ctx.fillText(seg.text, cx, INFO_LINE1_Y);
+      cx += ctx.measureText(seg.text).width;
+    });
+    ctx.textAlign = 'center';
+
+    // ── Ligne 2 : VMA · Courses ──
+    if (hasExtra) {
+      const extraParts = [];
+      if (showVma && p.vma != null) {
+        extraParts.push({ text: `VMA : ${parseFloat(p.vma).toFixed(1)} km/h`, color: '#888888', bold: true });
+      }
+      if (showCourses) {
+        // Trouver les courses du participant via state.courses et course_participants
+        // On utilise l'aperçu avec les cours de state si disponible, sinon placeholder
+        const courseNames = (state.courses || [])
+          .filter(c => (c._participants || []).includes(p.id))
+          .map(c => c.nom);
+        const courseTxt = courseNames.length ? courseNames.join(', ') : '(courses à charger)';
+        extraParts.push({ text: courseTxt, color: '#888888' });
+      }
+
+      if (extraParts.length) {
+        const extraFontSize = Math.round(W * 0.036);
+        ctx.font = `400 ${extraFontSize}px IBM Plex Sans, sans-serif`;
+        const dotW = ctx.measureText(' · ').width;
+        let eTotalW = extraParts.reduce((acc, s, i) => {
+          const w = ctx.measureText(s.text).width;
+          return acc + w + (i > 0 ? dotW : 0);
+        }, 0);
+        let ex = W / 2 - eTotalW / 2;
+        extraParts.forEach((seg, i) => {
+          if (i > 0) {
+            ctx.fillStyle = '#cccccc';
+            ctx.textAlign = 'left';
+            ctx.fillText(' · ', ex, INFO_LINE2_Y);
+            ex += dotW;
+          }
+          ctx.fillStyle = seg.color;
+          ctx.font = seg.bold
+            ? `700 ${extraFontSize}px IBM Plex Sans, sans-serif`
+            : `400 ${extraFontSize}px IBM Plex Sans, sans-serif`;
+          ctx.textAlign = 'left';
+          ctx.fillText(seg.text, ex, INFO_LINE2_Y);
+          ex += ctx.measureText(seg.text).width;
+        });
+        ctx.textAlign = 'center';
+      }
+    }
+
+    const lbl = document.getElementById('dos-preview-label');
+    if (lbl) lbl.textContent = `Dossard n°${p.dossard} — ${p.nom} ${p.prenom}`;
+  } else {
+    ctx.fillStyle = '#bbbbbb';
+    ctx.font = `400 ${Math.round(W * 0.05)}px IBM Plex Sans, sans-serif`;
+    ctx.textBaseline = 'middle';
+    ctx.fillText('Aucun dossard attribué', W / 2, H * 0.45);
+    const lbl = document.getElementById('dos-preview-label');
+    if (lbl) lbl.textContent = '';
+  }
+
+  // ── Séparateur bas ──
+  ctx.strokeStyle = '#dddddd';
+  ctx.lineWidth = 0.8;
+  ctx.beginPath();
+  ctx.moveTo(W * 0.08, SEP_BOT_Y);
+  ctx.lineTo(W * 0.92, SEP_BOT_Y);
+  ctx.stroke();
+
+  // ── Bandeau bas ──
+  ctx.fillStyle = color;
+  ctx.fillRect(0, H - BANDEAU_H, W, BANDEAU_H);
+
+  // ── Logos dans le bandeau ──
+  const logos = _dossardState.logos;
+  if (logos.length) {
+    const logoH   = BANDEAU_H * 0.65;
+    const spacing = W / (logos.length + 1);
+    await Promise.all(logos.map((logo, i) => new Promise(resolve => {
+      const img = new Image();
+      img.onload = () => {
+        const ratio = img.width / img.height;
+        const logoW = logoH * ratio;
+        const x = spacing * (i + 1) - logoW / 2;
+        const y = H - BANDEAU_H + (BANDEAU_H - logoH) / 2;
+        ctx.drawImage(img, x, y, logoW, logoH);
+        resolve();
+      };
+      img.onerror = resolve;
+      img.src = logo.b64;
+    })));
+  }
+}
+
+function _dossardLogoDrop(e) {
+  e.preventDefault();
+  document.getElementById('dos-logo-dropzone').style.borderColor = 'var(--border)';
+  _dossardLogoAdd(e.dataTransfer.files);
+}
+
+async function _dossardLogoAdd(files) {
+  for (const file of files) {
+    const b64 = await new Promise((res, rej) => {
+      const r = new FileReader();
+      r.onload = e => res(e.target.result);
+      r.onerror = rej;
+      r.readAsDataURL(file);
+    });
+    if (!_dossardState.logos.find(l => l.name === file.name)) {
+      _dossardState.logos.push({ name: file.name, b64 });
+    }
+  }
+  _renderLogosList();
+  _dossardPreview();
+}
+
+function _renderLogosList() {
+  const el = document.getElementById('dos-logos-list');
+  if (!el) return;
+  el.innerHTML = _dossardState.logos.map((l, i) => `
+    <div style="display:flex;align-items:center;gap:6px;background:var(--surface2);border-radius:6px;padding:4px 8px;font-size:11px;color:var(--text2)">
+      <img src="${l.b64}" style="height:20px;object-fit:contain;border-radius:2px">
+      <span style="max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${l.name}</span>
+      <button onclick="_dossardRemoveLogo(${i})" style="background:none;border:none;color:var(--text3);cursor:pointer;font-size:14px;line-height:1;padding:0 2px">✕</button>
+    </div>`).join('');
+}
+
+function _dossardRemoveLogo(i) {
+  _dossardState.logos.splice(i, 1);
+  _renderLogosList();
+  _dossardPreview();
+}
+
+async function _dossardGenerate() {
+  const parts = _dossardFiltered();
+  if (!parts.length) { toast('Aucun dossard à générer — vérifiez que les dossards sont attribués', 'error'); return; }
+
+  toast('Génération du PDF…');
+
+  // Convertir les logos en base64 pur (sans le préfixe data:...)
+  const logos = _dossardState.logos.map(l => ({
+    name: l.name,
+    b64:  l.b64.split(',')[1] || '',
+    mime: l.b64.split(';')[0].split(':')[1] || 'image/png',
+  }));
+
+  const params = {
+    participants:    parts,
+    event_name:      state.evenement?.nom || '',
+    etab_filter:     _dossardState.etab,
+    classe_filter:   _dossardState.classe,
+    group_by_classe: _dossardState.groupByClasse,
+    show_vma:        _dossardState.showVma,
+    show_courses:    _dossardState.showCourses,
+    bandeau_color:   _dossardState.bandeauColor,
+    logos,
+  };
+
+  const res = await call('export_dossards_pdf', JSON.stringify(params));
+  if (res?.success) {
+    toast('PDF généré et ouvert');
+  } else {
+    toast(res?.error || 'Erreur lors de la génération', 'error');
+  }
+}
